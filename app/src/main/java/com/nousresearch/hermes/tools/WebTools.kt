@@ -20,6 +20,35 @@ import java.util.concurrent.TimeUnit
  * this is the `read_file`-equivalent for the network on mobile.
  */
 object WebTools {
+    private data class SearchHit(val title: String, val url: String, val snippet: String? = null)
+
+    private interface SearchProvider {
+        val name: String
+        fun buildUrl(query: String): String
+        fun parse(html: String, max: Int): List<SearchHit>
+    }
+
+    private val searchProviders = listOf(
+        ddgProvider(),
+        bingProvider("bing-cn", "https://cn.bing.com/search?q="),
+        bingProvider("bing", "https://www.bing.com/search?q="),
+        object : SearchProvider {
+            override val name = "360"
+            override fun buildUrl(query: String) = "https://www.so.com/s?q=${URLEncoder.encode(query, "UTF-8")}"
+            override fun parse(html: String, max: Int): List<SearchHit> = emptyList()
+        },
+        object : SearchProvider {
+            override val name = "baidu"
+            override fun buildUrl(query: String) = "https://www.baidu.com/s?wd=${URLEncoder.encode(query, "UTF-8")}"
+            override fun parse(html: String, max: Int): List<SearchHit> = Regex(
+                "<h3[^>]*>.*?<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+                setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
+            ).findAll(html).take(max).map { m ->
+                SearchHit(cleanTags(m.groupValues[2]).trim(), m.groupValues[1])
+            }.filter { it.title.isNotEmpty() && it.url.startsWith("http") }.toList()
+        },
+    )
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
@@ -34,8 +63,9 @@ object WebTools {
         ToolRegistry.register(
             name = "web_search",
             toolset = "web",
-            description = "联网搜索。返回标题、链接与摘要。当需要最新信息、" +
-                "事实核查、或用户问到你不确定的内容时使用。",
+            description = "联网搜索。会自动依次尝试多个搜索引擎（DuckDuckGo、Bing 等），" +
+                "返回标题、链接与摘要，并在 provider 字段标明实际生效的引擎。" +
+                "当需要最新信息、事实核查、或用户问到你不确定的内容时使用。",
             parameters = Schema.obj(
                 properties = mapOf(
                     "query" to Schema.string("搜索关键词"),
@@ -72,53 +102,69 @@ object WebTools {
     }
 
     private fun search(query: String, max: Int): String {
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val url = "https://lite.duckduckgo.com/lite/?q=$encoded"
-        val body = runCatching { get(url) }.getOrElse {
-            return ToolRegistry.errorJson("搜索请求失败: ${it.message}")
+        val failures = mutableListOf<String>()
+        var lastBody: String? = null
+        searchProviders.take(3).forEach { provider ->
+            try {
+                val body = get(provider.buildUrl(query), 8)
+                lastBody = body
+                val hits = provider.parse(body, max)
+                if (hits.isNotEmpty()) return searchJson(query, provider.name, hits)
+                failures += "${provider.name}: no parseable results"
+            } catch (e: Exception) {
+                failures += "${provider.name}: ${e.message ?: e.javaClass.simpleName}"
+            }
         }
-
-        // The lite endpoint emits a flat table; anchors carry results, following rows
-        // carry snippets. Parsing it keeps the tool dependency-free.
-        val results = JSONArray()
-        val anchor = Regex(
-            "<a[^>]*class=\"result-link\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
-        )
-        val snippet = Regex(
-            "<td[^>]*class=\"result-snippet\"[^>]*>(.*?)</td>",
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
-        )
-        val links = anchor.findAll(body).toList()
-        val snippets: List<String> = snippet.findAll(body).map { m ->
-            cleanTags(m.groupValues[1]).trim()
-        }.toList()
-
-        links.take(max).forEachIndexed { i, m ->
-            results.put(
-                JSONObject().apply {
-                    put("title", cleanTags(m.groupValues[2]).trim())
-                    put("url", m.groupValues[1])
-                    snippets.getOrNull(i)?.let { s -> put("snippet", s.take(400)) }
-                },
-            )
-        }
-
-        // Fallback for markup changes: return visible text so the model still gets data.
-        if (results.length() == 0) {
-            val plain = cleanTags(body).replace(Regex("\\s+"), " ").trim().take(3000)
+        val plain = lastBody?.let { cleanTags(it).replace(Regex("\\s+"), " ").trim().take(3000) }
+        if (!plain.isNullOrEmpty()) {
             return JSONObject().apply {
                 put("query", query)
+                put("provider", "fallback-text")
+                put("count", 0)
                 put("note", "未能解析出结构化结果，以下为页面纯文本，可能包含答案")
                 put("text", plain)
             }.toString()
         }
+        return ToolRegistry.errorJson("搜索请求失败: ${failures.joinToString("; ").take(900)}，当前网络可能屏蔽搜索引擎")
+    }
 
+    private fun searchJson(query: String, provider: String, hits: List<SearchHit>): String {
+        val results = JSONArray()
+        hits.forEach { hit ->
+            results.put(JSONObject().apply {
+                put("title", decodeEntities(hit.title))
+                put("url", decodeEntities(hit.url))
+                hit.snippet?.takeIf { it.isNotEmpty() }?.let { put("snippet", decodeEntities(it)) }
+            })
+        }
         return JSONObject().apply {
             put("query", query)
+            put("provider", provider)
             put("count", results.length())
             put("results", results)
         }.toString()
+    }
+
+    private fun ddgProvider() = object : SearchProvider {
+        override val name = "duckduckgo-lite"
+        override fun buildUrl(query: String) = "https://lite.duckduckgo.com/lite/?q=${URLEncoder.encode(query, "UTF-8")}"
+        override fun parse(body: String, max: Int): List<SearchHit> {
+            val anchor = Regex("<a[^>]*class=\"result-link\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+            val snippet = Regex("<td[^>]*class=\"result-snippet\"[^>]*>(.*?)</td>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+            val links = anchor.findAll(body).toList()
+            val snippets = snippet.findAll(body).map { cleanTags(it.groupValues[1]).trim() }.toList()
+            return links.take(max).mapIndexed { i, m -> SearchHit(cleanTags(m.groupValues[2]).trim(), m.groupValues[1], snippets.getOrNull(i)?.take(400)) }
+        }
+    }
+
+    private fun bingProvider(providerName: String, baseUrl: String) = object : SearchProvider {
+        override val name = providerName
+        override fun buildUrl(query: String) = baseUrl + URLEncoder.encode(query, "UTF-8")
+        override fun parse(html: String, max: Int): List<SearchHit> {
+            val anchors = Regex("<a[^>]*href=\"(http[^\"]+)\"[^>]*>\\s*<h2[^>]*>(.*?)</h2>\\s*</a>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)).findAll(html).take(max).toList()
+            val snippets = Regex("<p class=\"b_lineclamp[^\"]*\"[^>]*>(.*?)</p>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)).findAll(html).map { cleanTags(it.groupValues[1]).replace(Regex("\\s+"), " ").trim() }.toList()
+            return anchors.mapIndexed { i, m -> SearchHit(decodeEntities(cleanTags(m.groupValues[2]).replace(Regex("\\s+"), " ").trim()), m.groupValues[1], snippets.getOrNull(i)?.take(400)) }.filter { it.title.isNotEmpty() && it.url.startsWith("http") }
+        }
     }
 
     private fun fetch(url: String, cap: Int): String {
@@ -139,14 +185,16 @@ object WebTools {
         }.toString()
     }
 
-    private fun get(url: String): String {
+    private fun get(url: String, timeoutSeconds: Long? = null): String {
         val req = Request.Builder()
             .url(url)
             .addHeader("User-Agent", UA)
             .addHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .get()
             .build()
-        http.newCall(req).execute().use { resp ->
+        http.newCall(req).apply {
+            timeoutSeconds?.let { timeout().timeout(it, TimeUnit.SECONDS) }
+        }.execute().use { resp ->
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
             val stream = resp.body?.byteStream() ?: throw RuntimeException("空响应")
             // Cap the read so a huge page cannot exhaust memory on a phone.
