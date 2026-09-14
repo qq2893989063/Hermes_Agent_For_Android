@@ -1,5 +1,5 @@
 # Hermes Agent for Android
-
+适配与调试工作主要由Deepseek V4.1 flash完成，GPT5.6luna辅助编辑代码
 把 [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent) 的核心 Agent 架构移植到
 Android 手机，产出可直接安装的 **arm64-v8a (Arm V8A)** APK。
 
