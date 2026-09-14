@@ -1,7 +1,0 @@
-#Mon Sep 14 14:26:37 CST 2026
-base.1=D\:\\AIworkspace\\Hermes_Agent_For_Android\\hermes-android\\app\\build\\intermediates\\dex\\release\\mergeDexRelease\\classes2.dex
-path.1=classes2.dex
-base.0=D\:\\AIworkspace\\Hermes_Agent_For_Android\\hermes-android\\app\\build\\intermediates\\dex\\release\\mergeDexRelease\\classes.dex
-renamed.1=classes2.dex
-renamed.0=classes.dex
-path.0=classes.dex

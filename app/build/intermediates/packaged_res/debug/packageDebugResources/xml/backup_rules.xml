@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
-    <!-- Model config + memory are small; keep them across device transfers. -->
-    <include domain="sharedpref" path="hermes_config.xml" />
-    <include domain="sharedpref" path="hermes_memory.xml" />
-</full-backup-content>
