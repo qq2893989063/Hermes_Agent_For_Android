@@ -30,6 +30,7 @@
             android:name=".SettingsActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity"
+            android:theme="@style/Theme.Hermes.Settings"
             android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

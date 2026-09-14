@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Hermes" parent="Theme.AppCompat.Light.DarkActionBar">
+    <!--
+      NoActionBar is required for the chat screen: MainActivity installs its own
+      Toolbar via setSupportActionBar(b.toolbar). With *DarkActionBar the window decor
+      already supplies an action bar and AppCompat throws IllegalStateException
+      ("This Activity already has an action bar supplied by the window decor").
+    -->
+    <style name="Theme.Hermes" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="colorPrimary">@color/hermes_surface</item>
         <item name="colorPrimaryDark">@color/hermes_background</item>
         <item name="colorAccent">@color/hermes_gold</item>
@@ -8,6 +14,25 @@
         <item name="android:textColorPrimary">@color/hermes_text</item>
         <item name="android:textColorSecondary">@color/hermes_muted</item>
         <item name="android:colorBackground">@color/hermes_background</item>
+        <!-- Dark UI with light content: make status/nav bar icons legible. -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/hermes_background</item>
+        <item name="android:navigationBarColor">@color/hermes_background</item>
+    </style>
+
+    <!-- Settings screen: it uses the framework ActionBar (title + back arrow), so it
+         keeps an action bar in the decor and must NOT call setSupportActionBar. -->
+    <style name="Theme.Hermes.Settings" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="colorPrimary">@color/hermes_surface</item>
+        <item name="colorPrimaryDark">@color/hermes_background</item>
+        <item name="colorAccent">@color/hermes_gold</item>
+        <item name="android:windowBackground">@color/hermes_background</item>
+        <item name="android:textColorPrimary">@color/hermes_text</item>
+        <item name="android:textColorSecondary">@color/hermes_muted</item>
+        <item name="android:colorBackground">@color/hermes_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/hermes_background</item>
+        <item name="android:navigationBarColor">@color/hermes_background</item>
     </style>
 
     <style name="HermesRole">
