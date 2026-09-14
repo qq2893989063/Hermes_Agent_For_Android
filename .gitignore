@@ -1,12 +1,33 @@
+# Android / Gradle
 *.iml
 .gradle/
 /local.properties
+local.properties
 /.idea/
 .DS_Store
 build/
 /captures
 .externalNativeBuild
 .cxx
-local.properties
 *.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Signing material — never commit keystores or their passwords
+*.jks
 *.keystore
+keystore.properties
+signing.properties
+
+# Secrets
+.env
+.env.*
+*.key
+secrets.properties
+
+# OS / editor noise
+Thumbs.db
+*.swp
+*~
