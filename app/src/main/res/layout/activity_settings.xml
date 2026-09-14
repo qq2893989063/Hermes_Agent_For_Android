@@ -31,6 +31,40 @@
             style="@style/HermesFieldLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:text="@string/label_custom_url" />
+
+        <EditText
+            android:id="@+id/et_custom_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_bubble_meta"
+            android:hint="@string/hint_custom_url"
+            android:inputType="textUri"
+            android:padding="10dp"
+            android:textColor="@color/hermes_text"
+            android:textColorHint="@color/hermes_muted" />
+
+        <TextView
+            android:id="@+id/tv_custom_url_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="@string/label_custom_url_note"
+            android:textColor="@color/hermes_muted"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/tv_effective_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:textColor="@color/hermes_ok"
+            android:textSize="11sp" />
+
+        <TextView
+            style="@style/HermesFieldLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:text="@string/label_api_key" />
 
         <EditText

@@ -10,13 +10,17 @@
     <string name="attach_file">文件</string>
 
     <string name="settings_title">模型配置</string>
-    <string name="label_base_url">接口地址 Base URL</string>
+    <string name="label_base_url">接口地址 Base URL（可填主机或带 /v1 的地址；已有路径按原样使用）</string>
+    <string name="label_custom_url">自定义请求地址（可选，留空则用 Base URL 推导）</string>
+    <string name="hint_custom_url">https://host/v1/chat/completions</string>
+    <string name="label_custom_url_note">填写后将直接使用该完整地址，不再自动追加 /chat/completions。适用于带自定义路径前缀的中转或网关。</string>
     <string name="label_api_key">API Key</string>
     <string name="label_model">模型名称</string>
     <string name="label_temperature">温度 Temperature</string>
     <string name="label_max_tokens">最大输出 Tokens</string>
     <string name="label_system_prompt">附加系统指令（可选）</string>
-    <string name="hint_base_url">https://api.openai.com/v1</string>
+    <string name="hint_base_url">https://api.openai.com/v1
+也可填 https://cn.clawnode.cn；自动尝试合理变体，仅在 404/405 时切换</string>
     <string name="hint_api_key">sk-…</string>
     <string name="hint_model">gpt-4o-mini</string>
     <string name="hint_system_prompt">例如：始终用简体中文回答</string>
@@ -24,6 +28,10 @@
     <string name="test_connection">测试连接</string>
     <string name="fetch_models">拉取模型列表</string>
     <string name="saved">配置已保存</string>
+    <string name="effective_url_candidates_header">实际请求（按顺序尝试）：</string>
+    <string name="effective_url_custom_header">实际请求（自定义地址，仅此一个）：</string>
+    <string name="effective_url_candidate">%1$d. %2$s</string>
+    <string name="effective_url_fallback_note">仅在返回 404/405 时自动切换到下一个候选地址。</string>
 
     <string name="tools_title">已启用工具</string>
     <string name="skills_title">已内置技能</string>

@@ -5,6 +5,11 @@
       Toolbar via setSupportActionBar(b.toolbar). With *DarkActionBar the window decor
       already supplies an action bar and AppCompat throws IllegalStateException
       ("This Activity already has an action bar supplied by the window decor").
+
+      windowDrawsSystemBarBackgrounds/statusBarColor keep the bars dark, and the layouts
+      consume window insets explicitly (MainActivity/SettingsActivity) because
+      targetSdk 35 (Android 15) enforces edge-to-edge: fitsSystemWindows no longer pads
+      content away from the status bar, so a Toolbar at y=0 sits UNDER a 124px cutout.
     -->
     <style name="Theme.Hermes" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="colorPrimary">@color/hermes_surface</item>
@@ -14,9 +19,11 @@
         <item name="android:textColorPrimary">@color/hermes_text</item>
         <item name="android:textColorSecondary">@color/hermes_muted</item>
         <item name="android:colorBackground">@color/hermes_background</item>
-        <!-- Dark UI with light content: make status/nav bar icons legible. -->
+        <!-- Android 15 edge-to-edge: paint behind the bars, then inset the content. -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">@color/hermes_background</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:statusBarColor">@color/hermes_surface</item>
         <item name="android:navigationBarColor">@color/hermes_background</item>
     </style>
 
@@ -30,8 +37,10 @@
         <item name="android:textColorPrimary">@color/hermes_text</item>
         <item name="android:textColorSecondary">@color/hermes_muted</item>
         <item name="android:colorBackground">@color/hermes_background</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">@color/hermes_background</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:statusBarColor">@color/hermes_surface</item>
         <item name="android:navigationBarColor">@color/hermes_background</item>
     </style>
 

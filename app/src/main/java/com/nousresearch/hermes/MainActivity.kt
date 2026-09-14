@@ -24,6 +24,7 @@ import com.nousresearch.hermes.core.SkillRegistry
 import com.nousresearch.hermes.core.ToolRegistry
 import com.nousresearch.hermes.databinding.ActivityMainBinding
 import com.nousresearch.hermes.tools.FileTools
+import com.nousresearch.hermes.ui.Insets
 import com.nousresearch.hermes.ui.MessageAdapter
 import com.nousresearch.hermes.ui.UiMessage
 import kotlinx.coroutines.Job
@@ -52,9 +53,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Take sole ownership of inset handling before inflating (see Insets docs).
+        Insets.enableEdgeToEdge(this)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
         setSupportActionBar(b.toolbar)
+
+        // targetSdk 35 (Android 15) enforces edge-to-edge: the window draws behind the
+        // 124px status bar / display cutout, so a Toolbar at y=0 renders UNDER it.
+        //
+        // Insets go on root_container, NOT on the Toolbar: setSupportActionBar() hands
+        // padding ownership of the Toolbar to AppCompat, which resets it on layout and
+        // silently discards an inset padding applied to the toolbar itself.
+        Insets.padVertical(b.rootContainer)
 
         adapter = MessageAdapter(messages) { copyMessage(it) }
         b.messageList.layoutManager = LinearLayoutManager(this)

@@ -41,12 +41,12 @@ class LlmClient(private val cfg: ModelConfig) {
         .retryOnConnectionFailure(true)
         .build()
 
-    private fun request(messages: List<ChatMessage>, tools: List<JSONObject>, stream: Boolean): Request {
+    private fun request(url: String, messages: List<ChatMessage>, tools: List<JSONObject>, stream: Boolean): Request {
         val body = ChatRequest.build(cfg, messages, tools, stream)
             .toString()
             .toRequestBody(JSON)
         return Request.Builder()
-            .url(cfg.chatCompletionsUrl)
+            .url(url)
             .addHeader("Authorization", "Bearer ${cfg.apiKey}")
             .addHeader("Content-Type", "application/json")
             .addHeader("Accept", if (stream) "text/event-stream" else "application/json")
@@ -60,7 +60,9 @@ class LlmClient(private val cfg: ModelConfig) {
      */
     fun streamChat(messages: List<ChatMessage>, tools: List<JSONObject>): Flow<StreamEvent> =
         callbackFlow {
-            val call = http.newCall(request(messages, tools, stream = true))
+            val candidates = cfg.chatUrlCandidates()
+            val attempted = mutableListOf<String>()
+            var activeCall: Call? = null
             // Accumulators for fragmented tool-call deltas, keyed by streamed index.
             val callIds = mutableMapOf<Int, String>()
             val callNames = mutableMapOf<Int, String>()
@@ -68,7 +70,13 @@ class LlmClient(private val cfg: ModelConfig) {
             var finishReason: String? = null
             var sawAny = false
 
-            call.enqueue(object : Callback {
+            lateinit var enqueueCandidate: (Int) -> Unit
+            enqueueCandidate = { candidateIndex ->
+                val url = candidates[candidateIndex]
+                attempted += url
+                val call = http.newCall(request(url, messages, tools, stream = true))
+                activeCall = call
+                call.enqueue(object : Callback {
                 override fun onFailure(c: Call, e: IOException) {
                     trySendBlocking(StreamEvent.Failure("网络请求失败: ${e.message ?: e.javaClass.simpleName}"))
                     close()
@@ -78,8 +86,15 @@ class LlmClient(private val cfg: ModelConfig) {
                     response.use { resp ->
                         if (!resp.isSuccessful) {
                             val err = runCatching { resp.body?.string() }.getOrNull().orEmpty()
+                            if ((resp.code == 404 || resp.code == 405) && candidateIndex + 1 < candidates.size) {
+                                enqueueCandidate(candidateIndex + 1)
+                                return
+                            }
+                            val suffix = if (resp.code == 404 || resp.code == 405) {
+                                "; attempted: ${attempted.joinToString(", ")}" 
+                            } else ""
                             trySendBlocking(
-                                StreamEvent.Failure("HTTP ${resp.code}: ${summarize(err)}"),
+                                StreamEvent.Failure("HTTP ${resp.code}: ${summarize(err)}$suffix"),
                             )
                             close()
                             return
@@ -152,44 +167,64 @@ class LlmClient(private val cfg: ModelConfig) {
                         }
                     }
                 }
-            })
-            awaitClose { call.cancel() }
+                })
+            }
+            enqueueCandidate(0)
+            awaitClose { activeCall?.cancel() }
         }.flowOn(Dispatchers.IO)
 
     /** Non-streaming call — used when the provider rejects `stream: true`. */
     suspend fun complete(messages: List<ChatMessage>, tools: List<JSONObject>): JSONObject {
         val body = ChatRequest.build(cfg, messages, tools, stream = false).toString().toRequestBody(JSON)
-        val req = Request.Builder()
-            .url(cfg.chatCompletionsUrl)
-            .addHeader("Authorization", "Bearer ${cfg.apiKey}")
-            .addHeader("Content-Type", "application/json")
-            .post(body)
-            .build()
         return kotlinx.coroutines.withContext(Dispatchers.IO) {
-            http.newCall(req).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: ${summarize(text)}")
-                JSONObject(text)
+            val candidates = cfg.chatUrlCandidates()
+            val attempted = mutableListOf<String>()
+            var lastError = ""
+            for ((index, url) in candidates.withIndex()) {
+                attempted += url
+                http.newCall(request(url, messages, tools, stream = false)).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (resp.isSuccessful) return@withContext JSONObject(text)
+                    lastError = "HTTP ${resp.code}: ${summarize(text)}"
+                    if (resp.code != 404 && resp.code != 405) throw IOException(lastError)
+                    if (index == candidates.lastIndex) {
+                        throw IOException("$lastError; attempted: ${attempted.joinToString(", ")}")
+                    }
+                }
             }
+            throw IOException("$lastError; attempted: ${attempted.joinToString(", ")}")
         }
     }
 
     /** Fetch the model list from an OpenAI-compatible `/models` endpoint. */
     suspend fun listModels(): List<String> = kotlinx.coroutines.withContext(Dispatchers.IO) {
-        val base = ModelConfig.normalizeBase(cfg.baseUrl)
-        val req = Request.Builder()
-            .url("$base/models")
-            .addHeader("Authorization", "Bearer ${cfg.apiKey}")
-            .get()
-            .build()
-        http.newCall(req).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-            val data = JSONObject(text).optJSONArray("data") ?: JSONArray()
-            (0 until data.length()).mapNotNull { data.optJSONObject(it)?.optString("id") }
-                .filter { it.isNotBlank() }
-                .sorted()
+        val candidates = cfg.modelsCandidates()
+        var lastError = ""
+        for ((index, url) in candidates.withIndex()) {
+            val req = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer ${cfg.apiKey}")
+                .get()
+                .build()
+            http.newCall(req).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    lastError = "HTTP ${resp.code}"
+                    if ((resp.code == 404 || resp.code == 405) && index < candidates.lastIndex) return@use
+                    throw IOException(lastError)
+                }
+                val data = runCatching { JSONObject(text).optJSONArray("data") }.getOrNull()
+                if (data == null) {
+                    if (index < candidates.lastIndex) return@use
+                    return@withContext emptyList()
+                }
+                return@withContext (0 until data.length()).mapNotNull { data.optJSONObject(it)?.optString("id") }
+                    .filter { it.isNotBlank() }
+                    .sorted()
+            }
         }
+        if (lastError.isNotEmpty()) throw IOException(lastError)
+        emptyList()
     }
 
     private fun summarize(raw: String): String =

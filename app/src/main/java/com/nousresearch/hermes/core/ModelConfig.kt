@@ -18,11 +18,55 @@ data class ModelConfig(
     val temperature: Double = 0.7,
     val maxTokens: Int = 4096,
     val systemPrompt: String = "",
+    /**
+     * When set, used verbatim as the chat endpoint (no `/v1` or `/chat/completions`
+     * appended). Lets the user point at an arbitrary relay path, e.g.
+     * `https://host/api/openai/chat/completions` or a gateway with a custom prefix.
+     */
+    val customChatUrl: String = "",
 ) {
     val isConfigured: Boolean get() = apiKey.isNotBlank() && baseUrl.isNotBlank() && model.isNotBlank()
 
-    /** Chat-completions endpoint, tolerating a base URL with or without `/v1`. */
-    val chatCompletionsUrl: String get() = normalizeBase(baseUrl) + "/chat/completions"
+    /**
+     * Resolved chat-completions endpoint.
+     *
+     * If the user configured a full endpoint it wins outright; otherwise the base URL is
+     * normalized (tolerating `https://host`, `https://host/v1`, `…/v1/`) and
+     * `/chat/completions` appended.
+     */
+    val chatCompletionsUrl: String
+        get() = chatUrlCandidates().first()
+
+    /** Chat endpoints to try, in preference order. */
+    fun chatUrlCandidates(): List<String> {
+        if (customChatUrl.trim().isNotEmpty()) return listOf(customChatUrl)
+        val normalized = normalizeBase(baseUrl) + "/chat/completions"
+        val rawBase = baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions")
+        return listOf(normalized, "$rawBase/chat/completions").distinct()
+    }
+
+    /**
+     * Base used to build the `/models` listing URL. Derived from the resolved chat
+     * endpoint so a custom path keeps its prefix (…/v1/models next to …/v1/chat/…).
+     */
+    val modelsBaseUrl: String
+        get() {
+            val chat = chatCompletionsUrl
+            return if (chat.endsWith("/chat/completions")) {
+                chat.removeSuffix("/chat/completions")
+            } else {
+                // Custom, non-standard endpoint: fall back to the normalized base.
+                normalizeBase(baseUrl)
+            }
+        }
+
+    /** Model-list endpoints corresponding to the chat endpoint candidates. */
+    fun modelsCandidates(): List<String> {
+        if (customChatUrl.trim().isNotEmpty()) return listOf("$modelsBaseUrl/models")
+        val normalizedBase = normalizeBase(baseUrl)
+        val rawBase = baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions")
+        return listOf("$normalizedBase/models", "$rawBase/models").distinct()
+    }
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -35,14 +79,37 @@ data class ModelConfig(
         private const val K_TEMP = "temperature"
         private const val K_MAXTOK = "max_tokens"
         private const val K_SYS = "system_prompt"
+        private const val K_CUSTOM_URL = "custom_chat_url"
 
         fun normalizeBase(raw: String): String {
             var b = raw.trim().trimEnd('/')
             if (b.isEmpty()) b = DEFAULT_BASE_URL
             // Accept "https://host", "https://host/v1" and "…/chat/completions" alike.
             if (b.endsWith("/chat/completions")) b = b.removeSuffix("/chat/completions")
-            if (!b.endsWith("/v1") && !b.contains("/v1/")) b = "$b/v1"
+            val afterScheme = b.substringAfter("://", missingDelimiterValue = "")
+            if (afterScheme.isNotEmpty() && !afterScheme.contains('/')) b = "$b/v1"
             return b
+        }
+
+        /**
+         * Validates a user-supplied endpoint. Returns null when acceptable, else a
+         * human-readable reason — surfaced in the settings screen instead of failing
+         * later as an opaque network error.
+         */
+        fun validateChatUrl(raw: String): String? {
+            val s = raw.trim()
+            if (s.isEmpty()) return null // empty = use base URL derivation
+            if (!s.startsWith("http://") && !s.startsWith("https://")) {
+                return "必须以 http:// 或 https:// 开头"
+            }
+            val afterScheme = s.substringAfter("://")
+            if (afterScheme.isBlank() || !afterScheme.contains('/')) {
+                // No path at all — likely just a host; that's what base URL is for.
+                return "请填写到完整路径，例如 https://host/v1/chat/completions" +
+                    "（只填域名请改用上面的 Base URL）"
+            }
+            if (s.contains(' ')) return "地址中不能包含空格"
+            return null
         }
 
         private fun prefs(ctx: Context): SharedPreferences =
@@ -57,6 +124,7 @@ data class ModelConfig(
                 temperature = p.getString(K_TEMP, "0.7")?.toDoubleOrNull() ?: 0.7,
                 maxTokens = p.getString(K_MAXTOK, "4096")?.toIntOrNull() ?: 4096,
                 systemPrompt = p.getString(K_SYS, "") ?: "",
+                customChatUrl = p.getString(K_CUSTOM_URL, "") ?: "",
             )
         }
 
@@ -68,6 +136,7 @@ data class ModelConfig(
                 putString(K_TEMP, cfg.temperature.toString())
                 putString(K_MAXTOK, cfg.maxTokens.toString())
                 putString(K_SYS, cfg.systemPrompt)
+                putString(K_CUSTOM_URL, cfg.customChatUrl)
             }.apply()
         }
     }

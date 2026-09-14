@@ -1,6 +1,8 @@
 package com.nousresearch.hermes
 
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -9,6 +11,7 @@ import com.nousresearch.hermes.core.ModelConfig
 import com.nousresearch.hermes.core.SkillRegistry
 import com.nousresearch.hermes.core.ToolRegistry
 import com.nousresearch.hermes.databinding.ActivitySettingsBinding
+import com.nousresearch.hermes.ui.Insets
 import kotlinx.coroutines.launch
 
 /**
@@ -22,19 +25,40 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Insets.enableEdgeToEdge(this)
         b = ActivitySettingsBinding.inflate(layoutInflater)
         setContentView(b.root)
+
+        // This Activity uses the framework ActionBar (Theme.Hermes.Settings). Under
+        // targetSdk 35 edge-to-edge the decor no longer clears the status bar, so pad
+        // the content root's top by the cutout/status inset ourselves.
+        Insets.padVertical(b.root)
 
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         title = getString(R.string.settings_title)
 
         loadIntoForm()
         renderCapabilities()
+        renderEffectiveUrl()
+
+        // Keep the resolved-endpoint preview in sync as the user types.
+        val watcher = object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) = renderEffectiveUrl()
+            override fun beforeTextChanged(s: CharSequence?, a: Int, c: Int, d: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, a: Int, bc: Int, c: Int) = Unit
+        }
+        b.etBaseUrl.addTextChangedListener(watcher)
+        b.etCustomUrl.addTextChangedListener(watcher)
 
         b.btnSave.setOnClickListener { save() }
 
         b.btnTest.setOnClickListener {
             val cfg = readForm()
+            val problem = validate(cfg)
+            if (problem != null) {
+                b.tvTestResult.text = problem
+                return@setOnClickListener
+            }
             ModelConfig.save(this, cfg)
             b.tvTestResult.text = "测试中…"
             lifecycleScope.launch {
@@ -47,6 +71,11 @@ class SettingsActivity : AppCompatActivity() {
             val cfg = readForm()
             if (cfg.apiKey.isBlank()) {
                 b.tvTestResult.text = "请先填写 API Key"
+                return@setOnClickListener
+            }
+            val problem = validate(cfg)
+            if (problem != null) {
+                b.tvTestResult.text = problem
                 return@setOnClickListener
             }
             ModelConfig.save(this, cfg)
@@ -81,6 +110,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun loadIntoForm() {
         val c = ModelConfig.load(this)
         b.etBaseUrl.setText(c.baseUrl)
+        b.etCustomUrl.setText(c.customChatUrl)
         b.etApiKey.setText(c.apiKey)
         b.etModel.setText(c.model)
         b.etTemperature.setText(c.temperature.toString())
@@ -95,13 +125,55 @@ class SettingsActivity : AppCompatActivity() {
         temperature = b.etTemperature.text.toString().trim().toDoubleOrNull() ?: 0.7,
         maxTokens = b.etMaxTokens.text.toString().trim().toIntOrNull() ?: 4096,
         systemPrompt = b.etSystemPrompt.text.toString().trim(),
+        customChatUrl = b.etCustomUrl.text.toString().trim(),
     )
+
+    /** Returns an error string when the form cannot be used, else null. */
+    private fun validate(cfg: ModelConfig): String? =
+        ModelConfig.validateChatUrl(cfg.customChatUrl)
+
+    /** Shows exactly which URL will be called, so relay paths are never a guess. */
+    private fun renderEffectiveUrl() {
+        val cfg = readForm()
+        val problem = ModelConfig.validateChatUrl(cfg.customChatUrl)
+        if (problem != null) {
+            b.tvEffectiveUrl.text = "✗ 自定义地址无效：$problem"
+            b.tvEffectiveUrl.setTextColor(getColor(R.color.hermes_error))
+            return
+        }
+        b.tvEffectiveUrl.setTextColor(getColor(R.color.hermes_ok))
+        b.tvEffectiveUrl.text = if (cfg.customChatUrl.isBlank()) {
+            val candidates = cfg.chatUrlCandidates()
+            buildString {
+                append(getString(R.string.effective_url_candidates_header))
+                append('\n')
+                append(candidates.mapIndexed { index, url ->
+                    getString(R.string.effective_url_candidate, index + 1, url)
+                }.joinToString("\n"))
+                append('\n')
+                append(getString(R.string.effective_url_fallback_note))
+            }
+        } else {
+            buildString {
+                append(getString(R.string.effective_url_custom_header))
+                append('\n')
+                append(getString(R.string.effective_url_candidate, 1, cfg.chatUrlCandidates().single()))
+            }
+        }
+    }
 
     private fun save() {
         val cfg = readForm()
+        val problem = validate(cfg)
+        if (problem != null) {
+            b.tvTestResult.text = problem
+            renderEffectiveUrl()
+            return
+        }
         ModelConfig.save(this, cfg)
         Toast.makeText(this, R.string.saved, Toast.LENGTH_SHORT).show()
         renderCapabilities()
+        renderEffectiveUrl()
     }
 
     private fun renderCapabilities() {
