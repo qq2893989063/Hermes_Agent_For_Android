@@ -13,10 +13,6 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
     }
 
     signingConfigs {
@@ -34,6 +30,17 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    // Arm V8A target: the APK declares arm64-v8a as its only ABI, so it installs
+    // natively on 64-bit ARM devices and is rejected by 32-bit-only hardware.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a")
+            isUniversalApk = false
         }
     }
 
@@ -65,4 +72,8 @@ android {
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

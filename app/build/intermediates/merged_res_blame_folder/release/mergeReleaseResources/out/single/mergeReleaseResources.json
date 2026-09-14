@@ -1,0 +1,38 @@
+[
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/drawable_bg_bubble_assistant.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/drawable/bg_bubble_assistant.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/layout_item_message.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/layout/item_message.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/layout_activity_main.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/drawable_bg_bubble_meta.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/drawable/bg_bubble_meta.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/xml_backup_rules.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/xml/backup_rules.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/layout_activity_settings.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/layout/activity_settings.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.nousresearch.hermes.app-release-32:/drawable_bg_bubble_user.xml.flat",
+        "source": "com.nousresearch.hermes.app-main-33:/drawable/bg_bubble_user.xml"
+    }
+]

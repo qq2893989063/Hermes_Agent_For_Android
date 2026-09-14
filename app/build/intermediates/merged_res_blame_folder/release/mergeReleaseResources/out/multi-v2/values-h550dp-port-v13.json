@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.nousresearch.hermes.app-mergeReleaseResources-30:/values-h550dp-port-v13/values-h550dp-port-v13.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\28939\\.gradle\\caches\\8.9\\transforms\\7541a12825e5668a182a454c329407b2\\transformed\\material-1.11.0\\res\\values-h550dp-port-v13\\values-h550dp-port-v13.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "64",
+                        "endOffsets": "115"
+                    }
+                }
+            ]
+        }
+    ]
+}

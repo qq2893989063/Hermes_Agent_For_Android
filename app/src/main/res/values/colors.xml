@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="hermes_background">#1E1E1E</color>
-    <color name="hermes_surface">#292929</color>
-    <color name="hermes_text">#E0E0E0</color>
+    <color name="hermes_background">#141414</color>
+    <color name="hermes_surface">#1E1E1E</color>
+    <color name="hermes_surface_alt">#292929</color>
+    <color name="hermes_text">#E8E8E8</color>
     <color name="hermes_muted">#9E9E9E</color>
     <color name="hermes_gold">#FFD700</color>
+    <color name="hermes_error">#FF6B6B</color>
+    <color name="hermes_ok">#7BD88F</color>
+    <color name="hermes_user_bubble">#2B3A55</color>
+    <color name="hermes_assistant_bubble">#222222</color>
+    <color name="hermes_meta_bubble">#1B1B1B</color>
+    <color name="hermes_divider">#33FFFFFF</color>
 </resources>

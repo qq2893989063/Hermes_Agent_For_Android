@@ -1,71 +1,355 @@
 package com.nousresearch.hermes
 
-import android.os.Bundle
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
-import android.view.inputmethod.InputMethodManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import com.nousresearch.hermes.core.Agent
+import com.nousresearch.hermes.core.AgentEvent
+import com.nousresearch.hermes.core.MemoryStore
+import com.nousresearch.hermes.core.ModelConfig
+import com.nousresearch.hermes.core.SkillRegistry
+import com.nousresearch.hermes.core.ToolRegistry
 import com.nousresearch.hermes.databinding.ActivityMainBinding
+import com.nousresearch.hermes.tools.FileTools
+import com.nousresearch.hermes.ui.MessageAdapter
+import com.nousresearch.hermes.ui.UiMessage
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
+/**
+ * Chat surface. Owns the [Agent] instance for the session and renders its event
+ * stream into the transcript.
+ *
+ * Attachment flow: the system picker returns a URI, which is embedded into the user's
+ * text as a directive (`read_image <uri>` / `read_file <uri>`) so the model invokes the
+ * right tool — the same "give the model the tool, let it decide" shape as upstream.
+ */
 class MainActivity : AppCompatActivity() {
-    private lateinit var binding: ActivityMainBinding
-    private val messages = mutableListOf<Message>()
-    private val messageAdapter = MessageAdapter(messages)
+
+    private lateinit var b: ActivityMainBinding
+    private lateinit var adapter: MessageAdapter
+    private val messages = mutableListOf<UiMessage>()
+
+    private var agent: Agent? = null
+    private var turnJob: Job? = null
+    /** Index of the assistant row currently being streamed into, or -1. */
+    private var streamingIndex = -1
+    private var lastUserText: String = ""
+    private var lastAttachment: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        b = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(b.root)
+        setSupportActionBar(b.toolbar)
 
-        setSupportActionBar(binding.toolbar)
-        supportActionBar?.setDisplayShowTitleEnabled(true)
+        adapter = MessageAdapter(messages) { copyMessage(it) }
+        b.messageList.layoutManager = LinearLayoutManager(this)
+        b.messageList.adapter = adapter
 
-        binding.messageList.layoutManager = LinearLayoutManager(this)
-        binding.messageList.adapter = messageAdapter
-        binding.sendButton.setOnClickListener { sendCurrentMessage() }
+        b.sendButton.setOnClickListener { onSendClicked() }
+        b.btnImage.setOnClickListener { pickImage.launch("image/*") }
+        b.btnFile.setOnClickListener { pickFile.launch("*/*") }
+        b.btnTools.setOnClickListener { showToolsDialog() }
+        b.btnMemory.setOnClickListener { showMemoryDialog() }
+
+        rebuildAgent()
+        refreshStatus()
     }
 
-    /** Public entry point for the Agent layer to append a conversation message. */
-    fun addMessage(role: String, text: String) {
-        messages += Message(role, text)
-        messageAdapter.notifyItemInserted(messages.lastIndex)
-        binding.messageList.scrollToPosition(messages.lastIndex)
+    override fun onResume() {
+        super.onResume()
+        // Config may have changed in SettingsActivity.
+        rebuildAgent()
+        refreshStatus()
+        if (messages.isEmpty()) showGreeting()
     }
 
-    private fun sendCurrentMessage() {
-        val text = binding.messageInput.text.toString().trim()
-        if (text.isEmpty()) return
-        addMessage("user", text)
-        binding.messageInput.text?.clear()
+    // ---- agent wiring -----------------------------------------------------
+
+    private fun rebuildAgent() {
+        val cfg = ModelConfig.load(this)
+        if (agent == null || turnJob?.isActive != true) {
+            agent = Agent(this, cfg)
+        }
+    }
+
+    private fun refreshStatus() {
+        val cfg = ModelConfig.load(this)
+        b.statusLine.text = if (!cfg.isConfigured) {
+            "未配置模型 —— 点击右上角设置填写 API Key"
+        } else {
+            val host = runCatching { Uri.parse(cfg.baseUrl).host }.getOrNull() ?: cfg.baseUrl
+            "${cfg.model} @ $host · 工具 ${ToolRegistry.available().size} · 技能 ${SkillRegistry.all(this).size}"
+        }
+    }
+
+    private fun showGreeting() {
+        val cfg = ModelConfig.load(this)
+        val text = if (!cfg.isConfigured) {
+            getString(R.string.empty_hint) + "\n\n（" + getString(R.string.need_config) + "）"
+        } else {
+            getString(R.string.empty_hint)
+        }
+        add(UiMessage(UiMessage.Role.SYSTEM, text))
+    }
+
+    // ---- sending ----------------------------------------------------------
+
+    private fun onSendClicked() {
+        if (turnJob?.isActive == true) {
+            // Second tap interrupts the running turn.
+            turnJob?.cancel()
+            turnJob = null
+            b.sendButton.text = getString(R.string.send)
+            if (streamingIndex >= 0) {
+                adapter.finishStreaming(streamingIndex)
+                streamingIndex = -1
+            }
+            add(UiMessage(UiMessage.Role.SYSTEM, "已中断本次生成。"))
+            return
+        }
+
+        val cfg = ModelConfig.load(this)
+        if (!cfg.isConfigured) {
+            add(UiMessage(UiMessage.Role.ERROR, getString(R.string.need_config)))
+            startActivity(Intent(this, SettingsActivity::class.java))
+            return
+        }
+
+        var text = b.messageInput.text.toString().trim()
+        val attach = lastAttachment
+        if (text.isEmpty() && attach == null) return
+
+        // Fold the attachment into the prompt as an explicit tool directive.
+        if (attach != null) {
+            val kind = if (attach.startsWith("image:")) "read_image" else "read_file"
+            val path = attach.substringAfter(':')
+            val prefix = if (kind == "read_image") {
+                "[用户提供了一张图片，请先用 read_image 查看它] 路径：$path"
+            } else {
+                "[用户提供了一个文件，请先用 read_file 读取它] 路径：$path"
+            }
+            text = if (text.isEmpty()) prefix else "$prefix\n\n$text"
+            lastAttachment = null
+            b.btnImage.alpha = 1f
+            b.btnFile.alpha = 1f
+        }
+
+        lastUserText = text
+        add(UiMessage(UiMessage.Role.USER, displayTextFor(text)))
+        b.messageInput.text?.clear()
+        hideKeyboard()
+
+        val a = agent ?: run {
+            rebuildAgent()
+            agent
+        } ?: return
+
+        turnJob = lifecycleScope.launch {
+            b.sendButton.text = getString(R.string.stop)
+            var sawAssistantRow = false
+            try {
+                a.run(text).collect { ev ->
+                    when (ev) {
+                        is AgentEvent.Text -> {
+                            if (streamingIndex < 0) {
+                                streamingIndex = add(
+                                    UiMessage(UiMessage.Role.ASSISTANT, "", streaming = true),
+                                )
+                                sawAssistantRow = true
+                            }
+                            adapter.appendTo(streamingIndex, ev.text)
+                            scrollToBottom()
+                        }
+                        is AgentEvent.Thinking -> Unit // reasoning is not shown inline
+                        is AgentEvent.ToolStart -> {
+                            if (streamingIndex >= 0) {
+                                adapter.finishStreaming(streamingIndex)
+                                streamingIndex = -1
+                            }
+                            add(
+                                UiMessage(
+                                    UiMessage.Role.TOOL,
+                                    "▸ 调用 ${ev.name}\n${Agent.prettyArgs(ev.args)}",
+                                ),
+                            )
+                            scrollToBottom()
+                        }
+                        is AgentEvent.ToolEnd -> {
+                            add(
+                                UiMessage(
+                                    UiMessage.Role.TOOL,
+                                    summarizeToolResult(ev.name, ev.result),
+                                ),
+                            )
+                            scrollToBottom()
+                        }
+                        is AgentEvent.Notice -> add(UiMessage(UiMessage.Role.SYSTEM, ev.text))
+                        is AgentEvent.Error -> {
+                            if (streamingIndex >= 0) {
+                                adapter.finishStreaming(streamingIndex)
+                                streamingIndex = -1
+                            }
+                            add(UiMessage(UiMessage.Role.ERROR, ev.text))
+                            scrollToBottom()
+                        }
+                        AgentEvent.TurnDone -> Unit
+                    }
+                }
+            } catch (t: Throwable) {
+                if (streamingIndex >= 0) {
+                    adapter.finishStreaming(streamingIndex)
+                    streamingIndex = -1
+                }
+                if (t !is kotlinx.coroutines.CancellationException) {
+                    add(UiMessage(UiMessage.Role.ERROR, t.message ?: t.javaClass.simpleName))
+                }
+            } finally {
+                if (streamingIndex >= 0) {
+                    adapter.finishStreaming(streamingIndex)
+                    streamingIndex = -1
+                }
+                b.sendButton.text = getString(R.string.send)
+                turnJob = null
+                scrollToBottom()
+            }
+        }
+    }
+
+    /** Show a short label for attachment-bearing prompts. */
+    private fun displayTextFor(full: String): String {
+        val idx = full.indexOf("]\n\n")
+        return if (full.startsWith("[用户提供") && idx > 0) full.substring(idx + 3) else full
+    }
+
+    /** Tool results are bulky; show a bounded preview in the transcript. */
+    private fun summarizeToolResult(name: String, result: String): String {
+        val json = runCatching { org.json.JSONObject(result) }.getOrNull()
+        val err = json?.optString("error").orEmpty()
+        if (err.isNotEmpty()) return "✗ $name 失败：$err"
+        val oneLine = result.replace(Regex("\\s+"), " ").trim()
+        return "✓ $name → ${oneLine.take(300)}" + if (oneLine.length > 300) " …" else ""
+    }
+
+    // ---- attachments ------------------------------------------------------
+
+    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) attach(uri, isImage = true)
+    }
+
+    private val pickFile = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) attach(uri, isImage = false)
+    }
+
+    private fun attach(uri: Uri, isImage: Boolean) {
+        // Persist read permission so the tool can reopen the URI during the turn.
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        val name = FileTools.displayName(this, uri) ?: uri.toString()
+        lastAttachment = (if (isImage) "image:" else "file:") + uri.toString()
+        val chunky = if (isImage) b.btnImage else b.btnFile
+        chunky.alpha = 0.5f
+        add(UiMessage(UiMessage.Role.SYSTEM, "已附加：$name（发送后交给模型处理）"))
+    }
+
+    // ---- dialogs ----------------------------------------------------------
+
+    private fun showToolsDialog() {
+        val byToolset = ToolRegistry.byToolset()
+        val msg = if (byToolset.isEmpty()) "（无可用工具）"
+        else byToolset.entries.joinToString("\n\n") { (ts, names) ->
+            "【$ts】\n${names.joinToString("\n") { "• $it" }}"
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.tools_title)
+            .setMessage(msg)
+            .setPositiveButton("好", null)
+            .show()
+    }
+
+    private fun showMemoryDialog() {
+        val body = MemoryStore.renderJson(this)
+        val pretty = runCatching { org.json.JSONObject(body).toString(2) }.getOrDefault(body)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.memory_title)
+            .setMessage(pretty)
+            .setNeutralButton(R.string.memory_clear) { _, _ ->
+                MemoryStore.clear(this)
+                add(UiMessage(UiMessage.Role.SYSTEM, "记忆已清空。"))
+            }
+            .setPositiveButton("好", null)
+            .show()
+    }
+
+    private fun copyMessage(m: UiMessage) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("hermes", m.text))
+        Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
+    }
+
+    // ---- menu / misc ------------------------------------------------------
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, MENU_NEW, 0, R.string.clear)
+        menu.add(0, MENU_SETTINGS, 1, R.string.settings)
+
+        // Settings lives in the overflow; surface it with an icon too.
+        val item = menu.findItem(MENU_SETTINGS)
+        item.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
+        MENU_NEW -> {
+            agent?.reset()
+            messages.clear()
+            adapter.notifyDataSetChanged()
+            showGreeting()
+            true
+        }
+        MENU_SETTINGS -> {
+            startActivity(Intent(this, SettingsActivity::class.java))
+            true
+        }
+        else -> super.onOptionsItemSelected(item)
+    }
+
+    private fun add(m: UiMessage): Int {
+        val idx = adapter.add(m)
+        scrollToBottom()
+        return idx
+    }
+
+    private fun scrollToBottom() {
+        if (messages.isEmpty()) return
+        b.messageList.post { b.messageList.scrollToPosition(messages.lastIndex) }
+    }
+
+    private fun hideKeyboard() {
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-            ?.hideSoftInputFromWindow(binding.messageInput.windowToken, 0)
+            ?.hideSoftInputFromWindow(b.messageInput.windowToken, 0)
     }
 
-    private data class Message(val role: String, val text: String)
-
-    private class MessageAdapter(private val items: List<Message>) :
-        RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() {
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MessageViewHolder {
-            val view = LayoutInflater.from(parent.context)
-                .inflate(android.R.layout.simple_list_item_2, parent, false)
-            return MessageViewHolder(view)
-        }
-
-        override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
-            val message = items[position]
-            holder.title.text = message.role.replaceFirstChar { it.uppercase() }
-            holder.body.text = message.text
-        }
-
-        override fun getItemCount(): Int = items.size
-
-        private class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-            val title = view.findViewById<android.widget.TextView>(android.R.id.text1)
-            val body = view.findViewById<android.widget.TextView>(android.R.id.text2)
-        }
+    companion object {
+        private const val MENU_NEW = 1
+        private const val MENU_SETTINGS = 2
     }
 }

@@ -1,14 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Hermes" parent="Theme.AppCompat.Light.DarkActionBar">
-        <item name="android:fontFamily">sans</item>
-        <item name="windowActionBar">false</item>
-        <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">@color/hermes_background</item>
-        <item name="android:colorAccent">@color/hermes_gold</item>
+        <item name="colorPrimary">@color/hermes_surface</item>
+        <item name="colorPrimaryDark">@color/hermes_background</item>
         <item name="colorAccent">@color/hermes_gold</item>
-        <item name="android:navigationBarColor">@color/hermes_background</item>
-        <item name="android:statusBarColor">@color/hermes_surface</item>
+        <item name="android:windowBackground">@color/hermes_background</item>
         <item name="android:textColorPrimary">@color/hermes_text</item>
+        <item name="android:textColorSecondary">@color/hermes_muted</item>
+        <item name="android:colorBackground">@color/hermes_background</item>
+    </style>
+
+    <style name="HermesRole">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/hermes_gold</item>
+        <item name="android:paddingBottom">4dp</item>
+    </style>
+
+    <style name="HermesBody">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/hermes_text</item>
+        <item name="android:lineSpacingMultiplier">1.15</item>
+        <item name="android:textIsSelectable">true</item>
+    </style>
+
+    <style name="HermesFieldLabel">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/hermes_muted</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">4dp</item>
     </style>
 </resources>
