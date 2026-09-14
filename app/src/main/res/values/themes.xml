@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Hermes" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="windowActionBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/hermes_background</item>
+        <item name="android:colorAccent">@color/hermes_gold</item>
+        <item name="colorAccent">@color/hermes_gold</item>
+        <item name="android:navigationBarColor">@color/hermes_background</item>
+        <item name="android:statusBarColor">@color/hermes_surface</item>
+        <item name="android:textColorPrimary">@color/hermes_text</item>
+    </style>
+</resources>

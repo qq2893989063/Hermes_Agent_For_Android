@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hermes Agent</string>
+    <string name="message_hint">Ask Hermes...</string>
+    <string name="send">Send</string>
+</resources>
