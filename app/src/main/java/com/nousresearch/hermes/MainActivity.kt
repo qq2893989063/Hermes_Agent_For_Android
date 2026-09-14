@@ -15,17 +15,24 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.GravityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.nousresearch.hermes.core.Agent
 import com.nousresearch.hermes.core.AgentEvent
 import com.nousresearch.hermes.core.MemoryStore
 import com.nousresearch.hermes.core.ModelConfig
+import com.nousresearch.hermes.core.ChatMessage
+import com.nousresearch.hermes.core.Session
+import com.nousresearch.hermes.core.SessionStore
 import com.nousresearch.hermes.core.SkillRegistry
 import com.nousresearch.hermes.core.ToolRegistry
 import com.nousresearch.hermes.databinding.ActivityMainBinding
 import com.nousresearch.hermes.tools.FileTools
 import com.nousresearch.hermes.ui.Insets
 import com.nousresearch.hermes.ui.MessageAdapter
+import com.nousresearch.hermes.ui.SessionAdapter
 import com.nousresearch.hermes.ui.UiMessage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -50,6 +57,10 @@ class MainActivity : AppCompatActivity() {
     private var streamingIndex = -1
     private var lastUserText: String = ""
     private var lastAttachment: String? = null
+    private lateinit var sessionStore: SessionStore
+    private lateinit var sessionAdapter: SessionAdapter
+    private var sessionId: String? = null
+    private var restored = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +69,12 @@ class MainActivity : AppCompatActivity() {
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
         setSupportActionBar(b.toolbar)
+        sessionStore = SessionStore(this)
+        b.toolbar.setNavigationIcon(android.R.drawable.ic_menu_sort_by_size)
+        b.toolbar.setNavigationOnClickListener {
+            if (b.drawerLayout.isDrawerOpen(GravityCompat.START)) b.drawerLayout.closeDrawer(GravityCompat.START)
+            else b.drawerLayout.openDrawer(GravityCompat.START)
+        }
 
         // targetSdk 35 (Android 15) enforces edge-to-edge: the window draws behind the
         // 124px status bar / display cutout, so a Toolbar at y=0 renders UNDER it.
@@ -66,10 +83,22 @@ class MainActivity : AppCompatActivity() {
         // padding ownership of the Toolbar to AppCompat, which resets it on layout and
         // silently discards an inset padding applied to the toolbar itself.
         Insets.padVertical(b.rootContainer)
+        // The root owns system bars; the input row owns the larger IME/nav bottom.
+        // Keeping these owners separate prevents the keyboard inset being added twice.
+        Insets.padForIme(b.inputRow)
+        ViewCompat.setOnApplyWindowInsetsListener(b.messageList) { _, insets ->
+            if (insets.isVisible(WindowInsetsCompat.Type.ime())) scrollToBottom()
+            insets
+        }
 
         adapter = MessageAdapter(messages) { copyMessage(it) }
         b.messageList.layoutManager = LinearLayoutManager(this)
         b.messageList.adapter = adapter
+        sessionAdapter = SessionAdapter({ loadSession(it) }, { showSessionMenu(it) })
+        b.sessionList.layoutManager = LinearLayoutManager(this)
+        b.sessionList.adapter = sessionAdapter
+        Insets.padTop(b.drawerPanel)
+        b.btnNewSession.setOnClickListener { startNewSession() }
 
         b.sendButton.setOnClickListener { onSendClicked() }
         b.btnImage.setOnClickListener { pickImage.launch("image/*") }
@@ -79,6 +108,7 @@ class MainActivity : AppCompatActivity() {
 
         rebuildAgent()
         refreshStatus()
+        restoreLatestSession()
     }
 
     override fun onResume() {
@@ -86,7 +116,9 @@ class MainActivity : AppCompatActivity() {
         // Config may have changed in SettingsActivity.
         rebuildAgent()
         refreshStatus()
-        if (messages.isEmpty()) showGreeting()
+        refreshSessions()
+        applyFont()
+        if (messages.isEmpty() && restored) showGreeting()
     }
 
     // ---- agent wiring -----------------------------------------------------
@@ -96,6 +128,88 @@ class MainActivity : AppCompatActivity() {
         if (agent == null || turnJob?.isActive != true) {
             agent = Agent(this, cfg)
         }
+    }
+
+    private fun applyFont() {
+        val font = com.nousresearch.hermes.core.FontConfig.load(this)
+        b.messageInput.typeface = font.typeface()
+        b.messageInput.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f * font.scale.multiplier)
+        b.statusLine.typeface = font.typeface()
+        b.statusLine.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f * font.scale.multiplier)
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun restoreLatestSession() {
+        if (restored) return
+        restored = true
+        val saved = sessionStore.list().firstOrNull()
+        if (saved == null) {
+            sessionId = java.util.UUID.randomUUID().toString()
+            showGreeting()
+            return
+        }
+        sessionId = saved.id
+        agent?.seed(saved.messages)
+        saved.messages.mapNotNullTo(messages) { messageToUi(it) }
+        adapter.notifyDataSetChanged()
+        scrollToBottom()
+    }
+
+    private fun refreshSessions() = sessionAdapter.submit(sessionStore.list())
+
+    private fun persistCurrentSession() {
+        val transcript = agent?.transcript().orEmpty()
+        if (transcript.isEmpty()) return
+        val title = transcript.firstOrNull { it.role == "user" }?.content?.trim()
+            ?.replace(Regex("\\s+"), " ")?.take(32)?.ifBlank { null } ?: getString(R.string.new_session)
+        sessionStore.save(Session(sessionId ?: java.util.UUID.randomUUID().toString(), title, System.currentTimeMillis(), transcript))
+        refreshSessions()
+    }
+
+    private fun messageToUi(message: ChatMessage): UiMessage? {
+        val text = message.content ?: return null
+        return when (message.role) {
+            "user" -> UiMessage(UiMessage.Role.USER, text)
+            "assistant" -> UiMessage(UiMessage.Role.ASSISTANT, text)
+            "tool" -> UiMessage(UiMessage.Role.TOOL, text)
+            else -> null
+        }
+    }
+
+    private fun loadSession(session: Session) {
+        turnJob?.cancel()
+        sessionId = session.id
+        agent?.seed(session.messages)
+        messages.clear()
+        session.messages.mapNotNullTo(messages) { messageToUi(it) }
+        adapter.notifyDataSetChanged()
+        b.drawerLayout.closeDrawer(GravityCompat.START)
+        scrollToBottom()
+    }
+
+    private fun showSessionMenu(session: Session) {
+        AlertDialog.Builder(this).setItems(arrayOf(getString(R.string.rename), getString(R.string.delete))) { _, which ->
+            if (which == 0) {
+                val input = android.widget.EditText(this).apply { setText(session.title); selectAll() }
+                AlertDialog.Builder(this).setTitle(R.string.rename).setView(input)
+                    .setPositiveButton(android.R.string.ok) { _, _ -> sessionStore.rename(session.id, input.text.toString()); refreshSessions() }
+                    .setNegativeButton(android.R.string.cancel, null).show()
+            } else AlertDialog.Builder(this).setMessage(R.string.delete_confirm)
+                .setPositiveButton(R.string.delete) { _, _ -> sessionStore.delete(session.id); refreshSessions() }
+                .setNegativeButton(android.R.string.cancel, null).show()
+        }.show()
+    }
+
+    private fun startNewSession() {
+        persistCurrentSession()
+        agent?.reset()
+        sessionId = java.util.UUID.randomUUID().toString()
+        sessionStore.save(Session(sessionId!!, getString(R.string.new_session), System.currentTimeMillis(), emptyList()))
+        messages.clear()
+        adapter.notifyDataSetChanged()
+        showGreeting()
+        b.drawerLayout.closeDrawer(GravityCompat.START)
+        refreshSessions()
     }
 
     private fun refreshStatus() {
@@ -236,6 +350,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 b.sendButton.text = getString(R.string.send)
                 turnJob = null
+                persistCurrentSession()
                 scrollToBottom()
             }
         }
@@ -330,10 +445,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
         MENU_NEW -> {
-            agent?.reset()
-            messages.clear()
-            adapter.notifyDataSetChanged()
-            showGreeting()
+            startNewSession()
             true
         }
         MENU_SETTINGS -> {
@@ -357,6 +469,11 @@ class MainActivity : AppCompatActivity() {
     private fun hideKeyboard() {
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
             ?.hideSoftInputFromWindow(b.messageInput.windowToken, 0)
+    }
+
+    override fun onPause() {
+        persistCurrentSession()
+        super.onPause()
     }
 
     companion object {

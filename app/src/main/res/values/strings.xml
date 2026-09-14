@@ -43,4 +43,13 @@
     <string name="empty_hint">配置好模型后即可开始对话。试试问我：\n\n• 帮我搜一下今天的 AI 领域新闻\n• 读一下我选的那张图片\n• 用 arxiv 技能找几篇关于 GRPO 的论文</string>
     <string name="need_config">请先在设置里填写 API Key</string>
     <string name="copied">已复制到剪贴板</string>
+    <string name="session_history">会话历史</string>
+    <string name="new_session">新会话</string>
+    <string name="rename">重命名</string>
+    <string name="delete">删除</string>
+    <string name="delete_confirm">确定删除这个会话吗？</string>
+    <string name="font_family">字体</string>
+    <string name="font_scale">字号</string>
+    <string-array name="font_family_options"><item>系统无衬线</item><item>黑体</item><item>衬线</item><item>等宽</item></string-array>
+    <string-array name="font_scale_options"><item>小</item><item>正常</item><item>大</item><item>特大</item></string-array>
 </resources>

@@ -183,6 +183,30 @@
             android:text="@string/save"
             android:textColor="@color/hermes_background" />
 
+        <TextView
+            style="@style/HermesFieldLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/font_family" />
+
+        <Spinner
+            android:id="@+id/sp_font_family"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:entries="@array/font_family_options" />
+
+        <TextView
+            style="@style/HermesFieldLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/font_scale" />
+
+        <Spinner
+            android:id="@+id/sp_font_scale"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:entries="@array/font_scale_options" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

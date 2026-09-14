@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.nousresearch.hermes.R
+import com.nousresearch.hermes.core.FontConfig
 
 /** One row in the transcript. */
 data class UiMessage(
@@ -41,6 +42,11 @@ class MessageAdapter(
         val ctx = holder.itemView.context
         holder.role.text = label(m)
         holder.body.text = m.text
+        val font = FontConfig.load(ctx)
+        holder.body.typeface = font.typeface()
+        holder.role.typeface = font.typeface()
+        holder.body.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f * font.scale.multiplier)
+        holder.role.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * font.scale.multiplier)
         holder.body.setTextColor(ctx.getColor(colorFor(m)))
         holder.card.setBackgroundResource(backgroundFor(m))
         holder.card.setOnLongClickListener {

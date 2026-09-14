@@ -63,9 +63,9 @@ object Insets {
                 bottom = baseBottom + if (bottom) bars.bottom else 0,
             )
 
-            // Rebuild the inset set, clearing only the edges we consumed. Using
-            // WindowInsetsCompat.CONSUMED here would swallow the IME inset too and break
-            // adjustResize keyboard handling for the message input.
+            // Rebuild the inset set, clearing only the edges we consumed. The IME must
+            // continue down the hierarchy because target-35 edge-to-edge does not make
+            // adjustResize resize this content automatically.
             var remaining = windowInsets
             if (left) remaining = remaining.inset(bars.left, 0, 0, 0)
             if (top) remaining = remaining.inset(0, bars.top, 0, 0)
@@ -84,4 +84,25 @@ object Insets {
 
     /** Pads top and bottom — the usual case for a full-screen content root. */
     fun padVertical(view: View) = pad(view, top = true, bottom = true)
+
+    /**
+     * The IME no longer causes an edge-to-edge target-35 window to resize by itself.
+     * Keep the IME unconsumed so sibling content can remeasure, while the docked row
+     * gets the larger of the keyboard and navigation-bar bottoms.
+     */
+    fun padForIme(view: View) {
+        val baseBottom = view.paddingBottom
+        val baseTop = view.paddingTop
+        ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+            val status = insets.getInsets(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout())
+            val navigation = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            v.updatePadding(
+                top = baseTop + status.top,
+                bottom = baseBottom + maxOf(ime.bottom, navigation.bottom),
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(view)
+    }
 }

@@ -8,6 +8,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.nousresearch.hermes.core.ModelConfig
+import com.nousresearch.hermes.core.FontConfig
+import com.nousresearch.hermes.core.FontFamily
+import com.nousresearch.hermes.core.FontScale
 import com.nousresearch.hermes.core.SkillRegistry
 import com.nousresearch.hermes.core.ToolRegistry
 import com.nousresearch.hermes.databinding.ActivitySettingsBinding
@@ -116,6 +119,9 @@ class SettingsActivity : AppCompatActivity() {
         b.etTemperature.setText(c.temperature.toString())
         b.etMaxTokens.setText(c.maxTokens.toString())
         b.etSystemPrompt.setText(c.systemPrompt)
+        val font = FontConfig.load(this)
+        b.spFontFamily.setSelection(FontFamily.values().indexOf(font.family))
+        b.spFontScale.setSelection(FontScale.values().indexOf(font.scale))
     }
 
     private fun readForm(): ModelConfig = ModelConfig(
@@ -171,6 +177,7 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         ModelConfig.save(this, cfg)
+        FontConfig.save(this, FontFamily.values()[b.spFontFamily.selectedItemPosition], FontScale.values()[b.spFontScale.selectedItemPosition])
         Toast.makeText(this, R.string.saved, Toast.LENGTH_SHORT).show()
         renderCapabilities()
         renderEffectiveUrl()
