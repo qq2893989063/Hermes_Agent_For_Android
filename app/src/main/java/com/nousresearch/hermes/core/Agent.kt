@@ -132,7 +132,23 @@ class Agent(
 
             val text = assistantText.toString()
             if (pendingCalls.isEmpty()) {
-                history.add(ChatMessage.assistant(text.ifBlank { null }))
+                // A round with no tool calls and no text is not an answer. Surface it instead
+                // of ending the turn silently -- otherwise the user's message gets no visible
+                // response at all (the "sent but nothing happens" defect).
+                if (text.isBlank()) {
+                    emit(
+                        AgentEvent.Error(
+                            if (iteration > 1) {
+                                "模型在工具调用后没有返回任何内容，本轮结束。"
+                            } else {
+                                "模型返回了空响应，请重试或检查模型与接口地址是否匹配。"
+                            },
+                        ),
+                    )
+                    emit(AgentEvent.TurnDone)
+                    return@flow
+                }
+                history.add(ChatMessage.assistant(text))
                 emit(AgentEvent.TurnDone)
                 return@flow
             }

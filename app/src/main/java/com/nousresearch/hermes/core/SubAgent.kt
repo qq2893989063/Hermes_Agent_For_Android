@@ -39,7 +39,8 @@ suspend fun runChild(
 ): SubAgentResult {
     val started = System.currentTimeMillis()
     var toolCalls = 0
-    var summary = StringBuilder()
+    var childError: String? = null
+    val summary = StringBuilder()
     return try {
         val prompt = buildString {
             append(CHILD_SYSTEM_PROMPT)
@@ -64,14 +65,29 @@ suspend fun runChild(
                     is AgentEvent.Text -> summary.append(event.text)
                     is AgentEvent.ToolStart -> { toolCalls++; onProgress?.invoke("${event.name} start") }
                     is AgentEvent.ToolEnd -> onProgress?.invoke("${event.name} done")
-                    is AgentEvent.Error -> summary.append("\n").append(event.text)
+                    is AgentEvent.Error -> {
+                        // An error event means the child never produced an answer. Track it so
+                        // the result reports ok=false instead of a happy status with an error
+                        // message sitting in `summary` (which the parent would read as success).
+                        childError = event.text
+                        summary.append("\n").append(event.text)
+                    }
                     is AgentEvent.Notice -> summary.append("\n").append(event.text)
                     else -> Unit
                 }
             }
         }
         // Report rounds actually taken, not the ceiling.
-        SubAgentResult(0, goal, boundedSummary(summary.toString().trim()), true, child.lastIterations, toolCalls, System.currentTimeMillis() - started)
+        SubAgentResult(
+            0,
+            goal,
+            boundedSummary(summary.toString().trim()),
+            childError == null,
+            child.lastIterations,
+            toolCalls,
+            System.currentTimeMillis() - started,
+            childError,
+        )
     } catch (e: TimeoutCancellationException) {
         SubAgentResult(0, goal, boundedSummary(summary.toString().trim()), false, 0, toolCalls, System.currentTimeMillis() - started, "子agent超时（120秒）")
     } catch (e: Throwable) {

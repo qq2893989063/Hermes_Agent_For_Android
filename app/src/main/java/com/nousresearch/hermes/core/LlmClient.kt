@@ -68,7 +68,11 @@ class LlmClient(private val cfg: ModelConfig) {
             val callNames = mutableMapOf<Int, String>()
             val callArgs = mutableMapOf<Int, StringBuilder>()
             var finishReason: String? = null
-            var sawAny = false
+            // Content arriving in ANY form, as opposed to merely well-formed SSE frames.
+            // Tracking only frame arrival let a content-less response pass as a real answer,
+            // so the turn ended with nothing rendered (the "sent but no reaction" defect).
+            var sawContent = false
+            var sawToolCall = false
 
             lateinit var enqueueCandidate: (Int) -> Unit
             enqueueCandidate = { candidateIndex ->
@@ -111,7 +115,6 @@ class LlmClient(private val cfg: ModelConfig) {
                                 val payload = line.removePrefix("data:").trim()
                                 if (payload.isEmpty()) continue
                                 if (payload == "[DONE]") break
-                                sawAny = true
                                 val json = runCatching { JSONObject(payload) }.getOrNull() ?: continue
                                 val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: continue
                                 choice.optString("finish_reason")
@@ -121,13 +124,20 @@ class LlmClient(private val cfg: ModelConfig) {
                                 val delta = choice.optJSONObject("delta") ?: JSONObject()
                                 delta.optString("content")
                                     .takeIf { it.isNotEmpty() && it != "null" }
-                                    ?.let { trySendBlocking(StreamEvent.TextDelta(it)) }
+                                    ?.let {
+                                        sawContent = true
+                                        trySendBlocking(StreamEvent.TextDelta(it))
+                                    }
                                 // Reasoning models expose chain-of-thought separately.
                                 delta.optString("reasoning_content")
                                     .takeIf { it.isNotEmpty() && it != "null" }
-                                    ?.let { trySendBlocking(StreamEvent.ThinkingDelta(it)) }
+                                    ?.let {
+                                        sawContent = true
+                                        trySendBlocking(StreamEvent.ThinkingDelta(it))
+                                    }
 
                                 delta.optJSONArray("tool_calls")?.let { tc ->
+                                    if (tc.length() > 0) sawToolCall = true
                                     for (i in 0 until tc.length()) {
                                         val d = tc.optJSONObject(i) ?: continue
                                         val idx = d.optInt("index", i)
@@ -156,10 +166,22 @@ class LlmClient(private val cfg: ModelConfig) {
                                 }
                                 if (calls.isNotEmpty()) trySendBlocking(StreamEvent.ToolCalls(calls))
                             }
-                            if (!sawAny && finishReason == null) {
-                                trySendBlocking(StreamEvent.Failure("模型返回了空响应"))
+                            // Guard against a "successful" response that carried no usable
+                            // content. Tracking only `sawAny` (any SSE data line) is not
+                            // enough: a chunk with an empty delta or a bare finish_reason
+                            // sets it, so a content-less turn passed as a real answer and
+                            // the UI rendered nothing. Require actual content or tool calls.
+                            val producedNothing = !sawContent && !sawToolCall
+                            if (producedNothing) {
+                                val why = if (finishReason != null) {
+                                    "模型结束了回复但没有返回任何内容（finish_reason=$finishReason）"
+                                } else {
+                                    "模型返回了空响应"
+                                }
+                                trySendBlocking(StreamEvent.Failure(why))
+                            } else {
+                                trySendBlocking(StreamEvent.Done(finishReason))
                             }
-                            trySendBlocking(StreamEvent.Done(finishReason))
                         } catch (t: Throwable) {
                             trySendBlocking(StreamEvent.Failure("解析流式响应失败: ${t.message}"))
                         } finally {

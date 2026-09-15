@@ -302,8 +302,10 @@ class MainActivity : AppCompatActivity() {
 
         turnJob = lifecycleScope.launch {
             b.sendButton.text = getString(R.string.stop)
-            var sawAssistantRow = false
             var delegationRow = -1
+            // True once ANY row is added for this turn, so the finally-block safety net knows
+            // whether the user actually saw a response.
+            var sawAnyRow = false
             try {
                 a.run(text).collect { ev ->
                     when (ev) {
@@ -312,7 +314,7 @@ class MainActivity : AppCompatActivity() {
                                 streamingIndex = add(
                                     UiMessage(UiMessage.Role.ASSISTANT, "", streaming = true),
                                 )
-                                sawAssistantRow = true
+                                sawAnyRow = true
                             }
                             adapter.appendTo(streamingIndex, ev.text)
                             scrollToBottom()
@@ -326,6 +328,7 @@ class MainActivity : AppCompatActivity() {
                             if (ev.name == "delegate_task") {
                                 val count = runCatching { org.json.JSONObject(ev.args).optJSONArray("tasks")?.length() }.getOrNull()
                                 delegationRow = add(UiMessage(UiMessage.Role.TOOL, getString(R.string.subagent_spawned) + (count?.let { " · $it" } ?: "")))
+                                sawAnyRow = true
                                 scrollToBottom()
                                 return@collect
                             }
@@ -335,6 +338,7 @@ class MainActivity : AppCompatActivity() {
                                     "▸ 调用 ${ev.name}\n${Agent.prettyArgs(ev.args)}",
                                 ),
                             )
+                            sawAnyRow = true
                             scrollToBottom()
                         }
                         is AgentEvent.ToolEnd -> {
@@ -350,15 +354,20 @@ class MainActivity : AppCompatActivity() {
                                     summarizeToolResult(ev.name, ev.result),
                                 ),
                             )
+                            sawAnyRow = true
                             scrollToBottom()
                         }
-                        is AgentEvent.Notice -> add(UiMessage(UiMessage.Role.SYSTEM, ev.text))
+                        is AgentEvent.Notice -> {
+                            add(UiMessage(UiMessage.Role.SYSTEM, ev.text))
+                            sawAnyRow = true
+                        }
                         is AgentEvent.Error -> {
                             if (streamingIndex >= 0) {
                                 adapter.finishStreaming(streamingIndex)
                                 streamingIndex = -1
                             }
                             add(UiMessage(UiMessage.Role.ERROR, ev.text))
+                            sawAnyRow = true
                             scrollToBottom()
                         }
                         AgentEvent.TurnDone -> Unit
@@ -371,11 +380,23 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (t !is kotlinx.coroutines.CancellationException) {
                     add(UiMessage(UiMessage.Role.ERROR, t.message ?: t.javaClass.simpleName))
+                    sawAnyRow = true
                 }
             } finally {
                 if (streamingIndex >= 0) {
                     adapter.finishStreaming(streamingIndex)
                     streamingIndex = -1
+                }
+                // Last-resort safety net: if the whole turn produced no visible row at all
+                // (no assistant text, no tool row, no error), the user would stare at their
+                // own message wondering whether the send worked. Always leave a trace.
+                if (!sawAnyRow) {
+                    add(
+                        UiMessage(
+                            UiMessage.Role.ERROR,
+                            "模型没有返回任何可见内容，请重试或检查模型配置。",
+                        ),
+                    )
                 }
                 b.sendButton.text = getString(R.string.send)
                 turnJob = null
@@ -396,6 +417,19 @@ class MainActivity : AppCompatActivity() {
         val json = runCatching { org.json.JSONObject(result) }.getOrNull()
         val err = json?.optString("error").orEmpty()
         if (err.isNotEmpty()) return "✗ $name 失败：$err"
+
+        // A delegation batch reports per-task status; surface a failed child explicitly
+        // instead of burying it in the JSON, where ok=false reads like success.
+        json?.optJSONArray("results")?.let { results ->
+            val okCount = (0 until results.length()).count {
+                results.optJSONObject(it)?.optBoolean("ok", false) == true
+            }
+            val total = results.length()
+            if (okCount < total) return "⚠ $name → $okCount/$total 个子任务成功（详见结果）"
+            val secs = (0 until total).sumOf { results.optJSONObject(it)?.optLong("elapsed_ms") ?: 0L } / 1000
+            return "✓ $name → $total 个子任务全部完成（累计 ${secs}s）"
+        }
+
         val oneLine = result.replace(Regex("\\s+"), " ").trim()
         return "✓ $name → ${oneLine.take(300)}" + if (oneLine.length > 300) " …" else ""
     }
