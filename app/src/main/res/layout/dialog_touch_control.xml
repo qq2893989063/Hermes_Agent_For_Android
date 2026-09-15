@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="wrap_content">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+        <TextView android:id="@+id/tv_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/hermes_muted" />
+        <TextView android:id="@+id/tv_screen_size" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="4dp" android:textColor="@color/hermes_muted" />
+        <TextView android:id="@+id/tv_hint" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="8dp" android:textColor="@color/hermes_error" />
+        <Button android:id="@+id/btn_permission" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/grant_permission" />
+        <Button android:id="@+id/btn_tap" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/touch_tap" />
+        <Button android:id="@+id/btn_swipe" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/touch_swipe" />
+        <Button android:id="@+id/btn_key" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/touch_key" />
+        <TextView android:id="@+id/tv_result" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="8dp" android:textColor="@color/hermes_text" />
+    </LinearLayout>
+</ScrollView>

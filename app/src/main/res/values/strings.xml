@@ -52,4 +52,13 @@
     <string name="font_scale">字号</string>
     <string-array name="font_family_options"><item>系统无衬线</item><item>黑体</item><item>衬线</item><item>等宽</item></string-array>
     <string-array name="font_scale_options"><item>小</item><item>正常</item><item>大</item><item>特大</item></string-array>
+    <string name="touch_control">触摸控制</string>
+    <string name="shizuku_status">Shizuku 状态</string>
+    <string name="grant_permission">授权 / 检查权限</string>
+    <string name="touch_tap">点击</string>
+    <string name="touch_swipe">滑动</string>
+    <string name="touch_key">按键</string>
+    <string name="screen_size">屏幕尺寸</string>
+    <string name="touch_not_installed">未安装 Shizuku</string>
+    <string name="shizuku_install_hint">需要先安装 Shizuku（可从应用商店或 shizuku.rikka.app 获取），并通过 adb/root 启动。</string>
 </resources>

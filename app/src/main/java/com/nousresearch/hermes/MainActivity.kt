@@ -9,8 +9,12 @@ import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.content.ComponentName
+import android.os.IBinder
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import android.widget.LinearLayout
+import android.widget.EditText
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -29,6 +33,9 @@ import com.nousresearch.hermes.core.SessionStore
 import com.nousresearch.hermes.core.SkillRegistry
 import com.nousresearch.hermes.core.ToolRegistry
 import com.nousresearch.hermes.databinding.ActivityMainBinding
+import com.nousresearch.hermes.databinding.DialogTouchControlBinding
+import com.nousresearch.hermes.core.ShizukuController
+import rikka.shizuku.Shizuku
 import com.nousresearch.hermes.tools.FileTools
 import com.nousresearch.hermes.ui.Insets
 import com.nousresearch.hermes.ui.MessageAdapter
@@ -68,6 +75,10 @@ class MainActivity : AppCompatActivity() {
         Insets.enableEdgeToEdge(this)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
+        ShizukuController.init(this)
+        Shizuku.addRequestPermissionResultListener { requestCode, _ -> if (requestCode == ShizukuController.REQUEST_CODE) invalidateOptionsMenu() }
+        Shizuku.addBinderReceivedListener { invalidateOptionsMenu() }
+        Shizuku.addBinderDeadListener { invalidateOptionsMenu() }
         setSupportActionBar(b.toolbar)
         sessionStore = SessionStore(this)
         b.toolbar.setNavigationIcon(android.R.drawable.ic_menu_sort_by_size)
@@ -119,6 +130,11 @@ class MainActivity : AppCompatActivity() {
         refreshSessions()
         applyFont()
         if (messages.isEmpty() && restored) showGreeting()
+    }
+
+    override fun onDestroy() {
+        ShizukuController.unbind()
+        super.onDestroy()
     }
 
     // ---- agent wiring -----------------------------------------------------
@@ -425,6 +441,40 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun showTouchDialog() {
+        val binding = DialogTouchControlBinding.inflate(layoutInflater)
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.touch_control).setView(binding.root).setPositiveButton("关闭", null).create()
+        fun refresh() {
+            binding.tvStatus.text = getString(R.string.shizuku_status) + "：" + ShizukuController.statusText(this)
+            val size = ShizukuController.screenSize()
+            binding.tvScreenSize.text = size?.let { "${getString(R.string.screen_size)} ${it.first} x ${it.second}" }.orEmpty()
+            val ready = ShizukuController.isPermissionGranted()
+            binding.tvHint.text = if (!ShizukuController.isAvailable()) getString(R.string.shizuku_install_hint) else ""
+            listOf(binding.btnTap, binding.btnSwipe, binding.btnKey).forEach { it.isEnabled = ready }
+            binding.btnPermission.isEnabled = ShizukuController.isAvailable()
+            if (ready) ShizukuController.bind()
+        }
+        binding.btnPermission.setOnClickListener { if (ShizukuController.isAvailable()) ShizukuController.requestPermission(); refresh() }
+        binding.btnTap.setOnClickListener { coordinateDialog("点击") { x, y -> binding.tvResult.text = ShizukuController.tap(x, y) } }
+        binding.btnSwipe.setOnClickListener { swipeDialog { a, c, d, e, dur -> binding.tvResult.text = ShizukuController.swipe(a, c, d, e, dur) } }
+        binding.btnKey.setOnClickListener { AlertDialog.Builder(this).setTitle(R.string.touch_key).setItems(arrayOf("返回", "Home", "最近任务", "电源")) { _, which -> binding.tvResult.text = ShizukuController.keyevent(intArrayOf(4, 3, 187, 26)[which]) }.show() }
+        dialog.setOnShowListener { refresh() }
+        dialog.show()
+    }
+
+    private fun coordinateDialog(title: String, action: (Int, Int) -> Unit) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 8, 32, 0) }
+        val x = EditText(this).apply { hint = "X"; inputType = 2 }; val y = EditText(this).apply { hint = "Y"; inputType = 2 }
+        box.addView(x); box.addView(y)
+        AlertDialog.Builder(this).setTitle(title).setView(box).setPositiveButton("执行") { _, _ -> val a=x.text.toString().toIntOrNull(); val c=y.text.toString().toIntOrNull(); if(a!=null&&c!=null) action(a,c) }.setNegativeButton("取消", null).show()
+    }
+
+    private fun swipeDialog(action: (Int, Int, Int, Int, Int) -> Unit) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 8, 32, 0) }
+        val fields = (1..5).map { EditText(this).apply { hint = arrayOf("X1","Y1","X2","Y2","时长(ms)")[it-1]; inputType = 2 } }; fields.forEach(box::addView)
+        AlertDialog.Builder(this).setTitle(R.string.touch_swipe).setView(box).setPositiveButton("执行") { _, _ -> val v=fields.map { it.text.toString().toIntOrNull() }; if(v.all { it!=null }) action(v[0]!!,v[1]!!,v[2]!!,v[3]!!,v[4]!!) }.setNegativeButton("取消", null).show()
+    }
+
     private fun copyMessage(m: UiMessage) {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("hermes", m.text))
@@ -436,6 +486,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, MENU_NEW, 0, R.string.clear)
         menu.add(0, MENU_SETTINGS, 1, R.string.settings)
+        menu.add(0, MENU_TOUCH, 2, R.string.touch_control)
 
         // Settings lives in the overflow; surface it with an icon too.
         val item = menu.findItem(MENU_SETTINGS)
@@ -452,6 +503,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
             true
         }
+        MENU_TOUCH -> { showTouchDialog(); true }
         else -> super.onOptionsItemSelected(item)
     }
 
@@ -479,5 +531,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val MENU_NEW = 1
         private const val MENU_SETTINGS = 2
+        private const val MENU_TOUCH = 3
     }
 }

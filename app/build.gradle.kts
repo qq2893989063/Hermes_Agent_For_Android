@@ -46,6 +46,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        aidl = true
     }
 
     compileOptions {
@@ -76,4 +77,6 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }
