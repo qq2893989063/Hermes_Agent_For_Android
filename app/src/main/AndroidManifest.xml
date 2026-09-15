@@ -25,7 +25,14 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
-        <service android:name=".ShellUserService" android:exported="false" />
+
+        <!--
+          ShellUserService is deliberately NOT declared here.
+
+          Shizuku user services are instantiated by shizuku_server itself via reflection, not
+          through the Android service mechanism, so a <service> entry is both unnecessary and
+          misleading. Declaring it as a real Service previously made the bind fail silently.
+        -->
 
         <activity
             android:name=".MainActivity"

@@ -23,6 +23,7 @@ object ToolBootstrap {
         MemoryTools.register(context)
         TodoTools.register(context)
         DelegateTools.register(context)
+        TouchTools.register(context)
         done = true
     }
 }

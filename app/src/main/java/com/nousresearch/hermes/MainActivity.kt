@@ -529,13 +529,34 @@ class MainActivity : AppCompatActivity() {
             binding.tvStatus.text = getString(R.string.shizuku_status) + "：" + ShizukuController.statusText(this)
             val size = ShizukuController.screenSize()
             binding.tvScreenSize.text = size?.let { "${getString(R.string.screen_size)} ${it.first} x ${it.second}" }.orEmpty()
-            val ready = ShizukuController.isPermissionGranted()
-            binding.tvHint.text = if (!ShizukuController.isAvailable()) getString(R.string.shizuku_install_hint) else ""
+            val ready = ShizukuController.isReady()
+            // Show the real blocker when the state is inconsistent, so "已授权但服务未连接"
+            // is not a dead end.
+            val mismatch = ShizukuController.permissionMismatchHint()
+            binding.tvHint.text = when {
+                !ShizukuController.isAvailable() -> getString(R.string.shizuku_install_hint)
+                mismatch != null -> mismatch
+                else -> ""
+            }
             listOf(binding.btnTap, binding.btnSwipe, binding.btnKey).forEach { it.isEnabled = ready }
             binding.btnPermission.isEnabled = ShizukuController.isAvailable()
-            if (ready) ShizukuController.bind()
+            // Bind whenever the user has granted permission, NOT only when already ready.
+            // `if (ready) bind()` was circular: isReady() requires a bound service, and this
+            // was the only place that could ever bind, so bind() never ran and the state
+            // stayed "已授权但服务未连接" forever.
+            if (ShizukuController.isPermissionGranted()) ShizukuController.bind()
         }
-        binding.btnPermission.setOnClickListener { if (ShizukuController.isAvailable()) ShizukuController.requestPermission(); refresh() }
+        binding.btnPermission.setOnClickListener {
+            if (ShizukuController.isAvailable()) {
+                if (ShizukuController.isPermissionGranted()) {
+                    // Already authorised: re-attempt the bind (and report why if it fails).
+                    ShizukuController.bind()
+                } else {
+                    ShizukuController.requestPermission()
+                }
+            }
+            refresh()
+        }
         binding.btnTap.setOnClickListener { coordinateDialog("点击") { x, y -> binding.tvResult.text = ShizukuController.tap(x, y) } }
         binding.btnSwipe.setOnClickListener { swipeDialog { a, c, d, e, dur -> binding.tvResult.text = ShizukuController.swipe(a, c, d, e, dur) } }
         binding.btnKey.setOnClickListener { AlertDialog.Builder(this).setTitle(R.string.touch_key).setItems(arrayOf("返回", "Home", "最近任务", "电源")) { _, which -> binding.tvResult.text = ShizukuController.keyevent(intArrayOf(4, 3, 187, 26)[which]) }.show() }
