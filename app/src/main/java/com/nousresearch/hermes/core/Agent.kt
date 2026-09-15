@@ -98,6 +98,9 @@ class Agent(
 
         var iteration = 0
         lastIterations = 0
+        // Guards the one-shot "please write up your findings" retry, so a model that keeps
+        // returning nothing cannot loop forever.
+        var askedForFinal = false
         while (iteration < maxIterations) {
             iteration++
             lastIterations = iteration
@@ -112,7 +115,7 @@ class Agent(
             var pendingCalls: List<ToolCall> = emptyList()
             var failure: String? = null
 
-            client.streamChat(messages, tools).collect { ev ->
+            client.chatWithFallback(messages, tools).collect { ev ->
                 when (ev) {
                     is StreamEvent.TextDelta -> {
                         assistantText.append(ev.text)
@@ -120,25 +123,56 @@ class Agent(
                     }
                     is StreamEvent.ThinkingDelta -> emit(AgentEvent.Thinking(ev.text))
                     is StreamEvent.ToolCalls -> pendingCalls = ev.calls
+                    is StreamEvent.Truncated -> {
+                        // chatWithFallback already retried with a non-streaming call, so this
+                        // only surfaces if the retry also failed to produce anything.
+                        failure = "流式响应被中断且重试无效（${ev.detail}）"
+                    }
                     is StreamEvent.Failure -> failure = ev.message
                     is StreamEvent.Done -> Unit
                 }
             }
 
-            if (failure != null) {
-                emit(AgentEvent.Error(failure!!))
+            // A stream-level failure is only decisive when this round produced nothing usable.
+            // The model often ends a tool round with just a finish_reason and no text (very
+            // common after several tool calls): LlmClient reports that as a Failure, but the
+            // round's tool results are already in `history`. If we have results in hand, ask
+            // once more for the write-up instead of discarding the whole turn.
+            val text = assistantText.toString()
+            val haveToolResults = history.any { it.role == "tool" }
+            if (failure != null && text.isBlank() && pendingCalls.isEmpty()) {
+                if (haveToolResults && !askedForFinal) {
+                    askedForFinal = true
+                    history.add(ChatMessage.user(ToolLoop.FINAL_ANSWER_PROMPT))
+                    continue
+                }
+                if (haveToolResults) {
+                    emit(
+                        AgentEvent.Error(
+                            "工具已执行完毕，但模型始终没有给出最终答复。已保留工具结果供参考。",
+                        ),
+                    )
+                } else {
+                    emit(AgentEvent.Error(failure!!))
+                }
+                emit(AgentEvent.TurnDone)
                 return@flow
             }
 
-            val text = assistantText.toString()
             if (pendingCalls.isEmpty()) {
-                // A round with no tool calls and no text is not an answer. Surface it instead
-                // of ending the turn silently -- otherwise the user's message gets no visible
-                // response at all (the "sent but nothing happens" defect).
                 if (text.isBlank()) {
+                    // Model stopped with neither text nor tools. If tools already ran, prompt
+                    // once for the summary; otherwise this really is an empty response.
+                    if (haveToolResults && !askedForFinal) {
+                        askedForFinal = true
+                        history.add(ChatMessage.user(ToolLoop.FINAL_ANSWER_PROMPT))
+                        continue
+                    }
                     emit(
                         AgentEvent.Error(
-                            if (iteration > 1) {
+                            if (haveToolResults) {
+                                "工具已执行完毕，但模型始终没有给出最终答复。已保留工具结果供参考。"
+                            } else if (iteration > 1) {
                                 "模型在工具调用后没有返回任何内容，本轮结束。"
                             } else {
                                 "模型返回了空响应，请重试或检查模型与接口地址是否匹配。"
@@ -157,18 +191,27 @@ class Agent(
             history.add(
                 ChatMessage(
                     role = "assistant",
-                    content = text.ifBlank { null },
+                    // Send "" rather than null: several gateways (incl. NewAPI-style
+                    // proxies) mishandle a null content on a tool-calling assistant turn.
+                    content = text.ifBlank { "" },
                     toolCalls = pendingCalls,
                 ),
             )
-            history.add(ChatMessage.system(ToolLoop.NUDGE))
 
+            // NOTE: the ToolLoop nudge must NOT go here. The OpenAI protocol requires every
+            // `tool` message to immediately follow the `assistant` turn that requested it,
+            // and `system` messages to sit at the front. Inserting a system message between
+            // them produced a malformed sequence that some gateways answer with an empty
+            // completion -- which surfaced to the user as "模型返回了空响应" on any tool-using
+            // turn (sub-agents doing research hit it every time).
             for (call in pendingCalls) {
                 emit(AgentEvent.ToolStart(call.name, call.arguments))
                 val result = ToolRegistry.dispatch(call)
                 emit(AgentEvent.ToolEnd(call.name, result))
                 history.add(ChatMessage.tool(call.id, result))
             }
+            // The nudge rides on the next user turn, keeping the tool block contiguous.
+            history.add(ChatMessage.user(ToolLoop.NUDGE))
         }
 
         emit(AgentEvent.Notice("已达到最大工具调用轮次（$maxIterations），停止本轮。"))

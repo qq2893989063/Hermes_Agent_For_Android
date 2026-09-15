@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import okhttp3.Call
 import okhttp3.Callback
@@ -23,6 +24,15 @@ sealed class StreamEvent {
     data class TextDelta(val text: String) : StreamEvent()
     data class ThinkingDelta(val text: String) : StreamEvent()
     data class ToolCalls(val calls: List<ToolCall>) : StreamEvent()
+
+    /**
+     * The stream ended without usable content and without a finish_reason: the connection was
+     * cut mid-response (observed on a NewAPI-style gateway: 3 frames, 871 bytes, then EOF).
+     * Retrying via a non-streaming request usually succeeds, so this is distinct from
+     * [Failure] -- the caller should retry, not give up.
+     */
+    data class Truncated(val detail: String) : StreamEvent()
+
     data class Done(val finishReason: String?) : StreamEvent()
     data class Failure(val message: String) : StreamEvent()
 }
@@ -73,6 +83,9 @@ class LlmClient(private val cfg: ModelConfig) {
             // so the turn ended with nothing rendered (the "sent but no reaction" defect).
             var sawContent = false
             var sawToolCall = false
+            // Stream shape, for diagnosing "empty response" without packet capture.
+            var dataFrames = 0
+            var rawBytes = 0L
 
             lateinit var enqueueCandidate: (Int) -> Unit
             enqueueCandidate = { candidateIndex ->
@@ -115,6 +128,8 @@ class LlmClient(private val cfg: ModelConfig) {
                                 val payload = line.removePrefix("data:").trim()
                                 if (payload.isEmpty()) continue
                                 if (payload == "[DONE]") break
+                                dataFrames++
+                                rawBytes += line.length
                                 val json = runCatching { JSONObject(payload) }.getOrNull() ?: continue
                                 val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: continue
                                 choice.optString("finish_reason")
@@ -173,12 +188,27 @@ class LlmClient(private val cfg: ModelConfig) {
                             // the UI rendered nothing. Require actual content or tool calls.
                             val producedNothing = !sawContent && !sawToolCall
                             if (producedNothing) {
-                                val why = if (finishReason != null) {
-                                    "模型结束了回复但没有返回任何内容（finish_reason=$finishReason）"
-                                } else {
-                                    "模型返回了空响应"
+                                // Include the stream shape. Without it, "empty response" is
+                                // indistinguishable from a truncated stream, a wrong endpoint,
+                                // or a proxy that ignores `stream: true`.
+                                val detail = buildString {
+                                    append("finish_reason=")
+                                    append(finishReason ?: "none")
+                                    append(", 数据帧=")
+                                    append(dataFrames)
+                                    append(", 字节=")
+                                    append(rawBytes)
                                 }
-                                trySendBlocking(StreamEvent.Failure(why))
+                                if (finishReason == null) {
+                                    // No finish_reason and no content == the response was cut
+                                    // short. Retryable, so report it as Truncated rather than
+                                    // a terminal Failure.
+                                    trySendBlocking(StreamEvent.Truncated(detail))
+                                } else {
+                                    trySendBlocking(
+                                        StreamEvent.Failure("模型没有返回任何内容（$detail）"),
+                                    )
+                                }
                             } else {
                                 trySendBlocking(StreamEvent.Done(finishReason))
                             }
@@ -217,6 +247,81 @@ class LlmClient(private val cfg: ModelConfig) {
             throw IOException("$lastError; attempted: ${attempted.joinToString(", ")}")
         }
     }
+
+    /**
+     * Streaming call with automatic recovery from a truncated stream.
+     *
+     * Some OpenAI-compatible gateways cut the SSE connection mid-response when the request
+     * carries a large tool schema: measured on device as 3 frames / 871 bytes then EOF, with
+     * no `finish_reason` and no `[DONE]`. The non-streaming path is unaffected, so retry once
+     * with `stream: false` and replay the result as normal events. Without this, every
+     * tool-using turn -- every sub-agent doing real work -- failed as an "empty response".
+     *
+     * Only retries when the stream produced nothing; a partial answer is kept as-is.
+     */
+    fun chatWithFallback(
+        messages: List<ChatMessage>,
+        tools: List<JSONObject>,
+    ): Flow<StreamEvent> = flow {
+        var truncatedDetail: String? = null
+        var sawText = false
+        var sawTools = false
+
+        streamChat(messages, tools).collect { ev ->
+            when (ev) {
+                is StreamEvent.TextDelta -> { sawText = true; emit(ev) }
+                is StreamEvent.ThinkingDelta -> { sawText = true; emit(ev) }
+                is StreamEvent.ToolCalls -> { sawTools = true; emit(ev) }
+                is StreamEvent.Truncated -> truncatedDetail = ev.detail
+                else -> emit(ev)
+            }
+        }
+
+        if (truncatedDetail != null && !sawText && !sawTools) {
+            emit(StreamEvent.ThinkingDelta("流式响应被中断，改用非流式重试…"))
+            val json = runCatching { complete(messages, tools) }.getOrElse { e ->
+                emit(
+                    StreamEvent.Failure(
+                        "流式被中断，非流式重试也失败：${e.message ?: e.javaClass.simpleName}（$truncatedDetail）",
+                    ),
+                )
+                return@flow
+            }
+            val choice = json.optJSONArray("choices")?.optJSONObject(0)
+            if (choice == null) {
+                emit(StreamEvent.Failure("非流式响应缺少 choices（$truncatedDetail）"))
+                return@flow
+            }
+            val message = choice.optJSONObject("message") ?: JSONObject()
+            val content = message.optString("content").takeIf { it.isNotEmpty() && it != "null" }
+            if (content != null) emit(StreamEvent.TextDelta(content))
+
+            val calls = mutableListOf<ToolCall>()
+            message.optJSONArray("tool_calls")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val d = arr.optJSONObject(i) ?: continue
+                    val fn = d.optJSONObject("function") ?: continue
+                    val name = fn.optString("name").takeIf { it.isNotEmpty() } ?: continue
+                    calls += ToolCall(
+                        id = d.optString("id").takeIf { it.isNotEmpty() } ?: "call_$i",
+                        name = name,
+                        arguments = fn.optString("arguments").ifEmpty { "{}" },
+                    )
+                }
+            }
+            if (calls.isNotEmpty()) emit(StreamEvent.ToolCalls(calls))
+
+            if (content == null && calls.isEmpty()) {
+                emit(StreamEvent.Failure("流式被中断，非流式重试仍无内容（$truncatedDetail）"))
+            } else {
+                emit(
+                    StreamEvent.Done(
+                        choice.optString("finish_reason").takeIf { it.isNotEmpty() && it != "null" },
+                    ),
+                )
+            }
+        }
+    }.flowOn(Dispatchers.IO)
 
     /** Fetch the model list from an OpenAI-compatible `/models` endpoint. */
     suspend fun listModels(): List<String> = kotlinx.coroutines.withContext(Dispatchers.IO) {

@@ -184,6 +184,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun messageToUi(message: ChatMessage): UiMessage? {
         val text = message.content ?: return null
+        // Internal control prompts are stored as `user` messages so the provider treats them
+        // as turn-taking, but they must never render: showing "[hermes-android] ..." in the
+        // transcript looks like the user typed it.
+        if (text.startsWith(com.nousresearch.hermes.core.ToolLoop.MARKER)) return null
         return when (message.role) {
             "user" -> UiMessage(UiMessage.Role.USER, text)
             "assistant" -> UiMessage(UiMessage.Role.ASSISTANT, text)
@@ -420,14 +424,44 @@ class MainActivity : AppCompatActivity() {
 
         // A delegation batch reports per-task status; surface a failed child explicitly
         // instead of burying it in the JSON, where ok=false reads like success.
-        json?.optJSONArray("results")?.let { results ->
-            val okCount = (0 until results.length()).count {
-                results.optJSONObject(it)?.optBoolean("ok", false) == true
+        //
+        // MUST be scoped to the delegating tool: web_search and web_fetch also return a
+        // "results" array, whose elements (title/url/snippet) have no `ok` field. Treating
+        // those as a batch reported a successful search as "⚠ web_search → 0/5 个子任务成功"
+        // -- where 5 was the hit count, not a task count -- and discarded the actual results.
+        if (name == "delegate_task") {
+            json?.optJSONArray("results")?.let { results ->
+                val total = results.length()
+                val okCount = (0 until total).count {
+                    results.optJSONObject(it)?.optBoolean("ok", false) == true
+                }
+                val secs = (0 until total).sumOf { results.optJSONObject(it)?.optLong("elapsed_ms") ?: 0L } / 1000
+                if (okCount == total) return "✓ $name → $total 个子任务全部完成（累计 ${secs}s）"
+                // Name the actual reason. Reporting a bare "0/1" made a timeout look like an
+                // empty model response, which sent debugging in the wrong direction.
+                val reasons = (0 until total).mapNotNull { i ->
+                    val r = results.optJSONObject(i) ?: return@mapNotNull null
+                    if (r.optBoolean("ok", false)) null
+                    else r.optString("error").takeIf { it.isNotBlank() } ?: "未返回内容"
+                }.distinct()
+                return "⚠ $name → $okCount/$total 个子任务成功（${reasons.joinToString("；").take(160)}）"
             }
-            val total = results.length()
-            if (okCount < total) return "⚠ $name → $okCount/$total 个子任务成功（详见结果）"
-            val secs = (0 until total).sumOf { results.optJSONObject(it)?.optLong("elapsed_ms") ?: 0L } / 1000
-            return "✓ $name → $total 个子任务全部完成（累计 ${secs}s）"
+        }
+
+        // web_search: report the query, the engine that answered, and the hit count, plus a
+        // compact list of titles so the transcript shows something usable.
+        if (name == "web_search") {
+            json?.optJSONArray("results")?.let { results ->
+                val provider = json.optString("provider").ifEmpty { "?" }
+                val count = results.length()
+                val titles = (0 until minOf(count, 5)).mapNotNull { i ->
+                    results.optJSONObject(i)?.optString("title")?.takeIf { it.isNotBlank() }
+                }
+                return buildString {
+                    append("✓ $name → $count 条结果（$provider）")
+                    titles.forEach { append("\n  · ").append(it.take(80)) }
+                }
+            }
         }
 
         val oneLine = result.replace(Regex("\\s+"), " ").trim()

@@ -44,7 +44,23 @@ object Soul {
 
 /** Tool-loop guidance appended after a tool round, mirroring the original's nudge. */
 object ToolLoop {
+    /**
+     * Every internal control message starts with this marker. It is the single source of
+     * truth for "do not render this in the transcript", so the UI can filter control turns
+     * without having to match each prompt's wording.
+     */
+    const val MARKER = "[hermes-android]"
+
     const val NUDGE: String =
-        "[hermes-android] 工具结果已注入。若已获得足够信息，请直接给出最终答复；" +
+        "$MARKER 工具结果已注入。若已获得足够信息，请直接给出最终答复；" +
             "若还需要信息，可继续调用工具，但避免重复同一个调用。"
+
+    /**
+     * Used when the model stops after tool calls without writing anything. Providers
+     * frequently end such a round with only a finish_reason, so the caller asks once for the
+     * write-up rather than declaring the whole turn empty.
+     */
+    const val FINAL_ANSWER_PROMPT: String =
+        "$MARKER 你已获得工具结果，但还没有给出答复。请立即根据以上结果直接写出最终答复，" +
+            "不要再调用工具，也不要询问用户。"
 }
