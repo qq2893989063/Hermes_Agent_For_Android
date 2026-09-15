@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Hermes Agent</string>
+    <string name="subagent_spawned">已派生子代理</string>
     <string name="message_hint">问点什么…</string>
     <string name="send">发送</string>
     <string name="stop">停止</string>

@@ -303,6 +303,7 @@ class MainActivity : AppCompatActivity() {
         turnJob = lifecycleScope.launch {
             b.sendButton.text = getString(R.string.stop)
             var sawAssistantRow = false
+            var delegationRow = -1
             try {
                 a.run(text).collect { ev ->
                     when (ev) {
@@ -322,6 +323,12 @@ class MainActivity : AppCompatActivity() {
                                 adapter.finishStreaming(streamingIndex)
                                 streamingIndex = -1
                             }
+                            if (ev.name == "delegate_task") {
+                                val count = runCatching { org.json.JSONObject(ev.args).optJSONArray("tasks")?.length() }.getOrNull()
+                                delegationRow = add(UiMessage(UiMessage.Role.TOOL, getString(R.string.subagent_spawned) + (count?.let { " · $it" } ?: "")))
+                                scrollToBottom()
+                                return@collect
+                            }
                             add(
                                 UiMessage(
                                     UiMessage.Role.TOOL,
@@ -331,6 +338,12 @@ class MainActivity : AppCompatActivity() {
                             scrollToBottom()
                         }
                         is AgentEvent.ToolEnd -> {
+                            if (ev.name == "delegate_task" && delegationRow >= 0) {
+                                adapter.appendTo(delegationRow, "\n" + summarizeToolResult(ev.name, ev.result))
+                                delegationRow = -1
+                                scrollToBottom()
+                                return@collect
+                            }
                             add(
                                 UiMessage(
                                     UiMessage.Role.TOOL,

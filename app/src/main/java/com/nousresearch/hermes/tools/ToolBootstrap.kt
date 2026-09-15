@@ -22,6 +22,7 @@ object ToolBootstrap {
         SkillTools.register(context)
         MemoryTools.register(context)
         TodoTools.register(context)
+        DelegateTools.register(context)
         done = true
     }
 }

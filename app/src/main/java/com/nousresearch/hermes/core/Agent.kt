@@ -30,9 +30,19 @@ class Agent(
     private val context: Context,
     private val cfg: ModelConfig,
     private val maxIterations: Int = 12,
+    private val blockedTools: Set<String> = emptySet(),
+    private val systemPromptOverride: String? = null,
 ) {
     private val client = LlmClient(cfg)
     private val history = mutableListOf<ChatMessage>()
+
+    /**
+     * Model round-trips actually performed in the last [run]. Distinct from
+     * [maxIterations], which is only the ceiling — reporting the ceiling as if it were the
+     * real count would misreport a one-shot answer as a 40-round tool loop.
+     */
+    var lastIterations: Int = 0
+        private set
 
     /** Clears conversation state (new session). */
     fun reset() {
@@ -49,6 +59,7 @@ class Agent(
     }
 
     private fun systemPrompt(): String {
+        systemPromptOverride?.let { return it }
         val memory = MemoryStore.render(context)
         val skills = SkillRegistry.indexForPrompt(context)
         val custom = cfg.systemPrompt.trim()
@@ -86,13 +97,17 @@ class Agent(
         history.add(ChatMessage.user(userText))
 
         var iteration = 0
+        lastIterations = 0
         while (iteration < maxIterations) {
             iteration++
+            lastIterations = iteration
             val messages = ArrayList<ChatMessage>(history.size + 1)
             messages.add(ChatMessage.system(systemPrompt()))
             messages.addAll(history)
 
-            val tools = ToolRegistry.available().map { it.schema() }
+            val tools = ToolRegistry.available()
+                .filterNot { it.name in blockedTools }
+                .map { it.schema() }
             var assistantText = StringBuilder()
             var pendingCalls: List<ToolCall> = emptyList()
             var failure: String? = null
