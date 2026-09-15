@@ -89,12 +89,16 @@ suspend fun runChild(
                 }
             }
         }
-        // Report rounds actually taken, not the ceiling.
+        // Report rounds actually taken, not the ceiling. A child that only produced an error
+        // still reports ok=false; but if it gathered tool output, keep that as the summary so
+        // the parent gets something usable instead of a bare failure.
+        val collected = summary.toString().trim()
+        val fallback = child.salvagedText()
         SubAgentResult(
             0,
             goal,
-            boundedSummary(summary.toString().trim()),
-            childError == null,
+            boundedSummary(collected.ifEmpty { fallback }),
+            childError == null && collected.isNotEmpty(),
             child.lastIterations,
             toolCalls,
             System.currentTimeMillis() - started,

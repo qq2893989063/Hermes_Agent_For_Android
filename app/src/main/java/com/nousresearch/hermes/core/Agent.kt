@@ -44,6 +44,34 @@ class Agent(
     var lastIterations: Int = 0
         private set
 
+    /**
+     * How many times to ask "write up your findings" after tools have run but the model
+     * produced no text. More than one, because a busy gateway can return empty twice in a
+     * row; capped, so an unresponsive model cannot spin forever.
+     */
+    private val MAX_FINAL_ATTEMPTS = 3
+
+    /**
+     * Last resort when the model will not write a summary: render the tool results we already
+     * have. Returning an error instead would discard real work the user paid for, and that
+     * error was not actionable anyway.
+     */
+    private fun salvageFromToolResults(): String {
+        val results = history.filter { it.role == "tool" }
+        if (results.isEmpty()) return ""
+        val body = results.joinToString("\n\n") { msg ->
+            val raw = msg.content.orEmpty().trim()
+            raw.take(600) + if (raw.length > 600) " …" else ""
+        }
+        return "（模型未能生成总结，以下为已获取到的工具结果原文）\n\n$body"
+    }
+
+    /**
+     * Whatever the tool round produced, for callers that would otherwise discard the turn
+     * (a sub-agent whose model went silent, for example).
+     */
+    fun salvagedText(): String = salvageFromToolResults()
+
     /** Clears conversation state (new session). */
     fun reset() {
         history.clear()
@@ -98,12 +126,24 @@ class Agent(
 
         var iteration = 0
         lastIterations = 0
-        // Guards the one-shot "please write up your findings" retry, so a model that keeps
-        // returning nothing cannot loop forever.
-        var askedForFinal = false
+        // Guards the "please write up your findings" retry, so a model that keeps returning
+        // nothing cannot loop forever. More than one attempt is needed: the first retry can
+        // itself come back empty on a busy gateway.
+        var finalAttempts = 0
+        // Guidance to fold into the next user turn (never a separate message).
+        var pendingGuidance: String? = null
         while (iteration < maxIterations) {
             iteration++
             lastIterations = iteration
+
+            // Fold any pending guidance into a single user turn. Appending it as its own
+            // message produced two consecutive `user` turns, which some gateways answer with
+            // an empty completion -- defeating the very retry added to recover from silence.
+            if (pendingGuidance != null) {
+                history.add(ChatMessage.user(pendingGuidance!!))
+                pendingGuidance = null
+            }
+
             val messages = ArrayList<ChatMessage>(history.size + 1)
             messages.add(ChatMessage.system(systemPrompt()))
             messages.addAll(history)
@@ -141,17 +181,15 @@ class Agent(
             val text = assistantText.toString()
             val haveToolResults = history.any { it.role == "tool" }
             if (failure != null && text.isBlank() && pendingCalls.isEmpty()) {
-                if (haveToolResults && !askedForFinal) {
-                    askedForFinal = true
-                    history.add(ChatMessage.user(ToolLoop.FINAL_ANSWER_PROMPT))
+                if (haveToolResults && finalAttempts < MAX_FINAL_ATTEMPTS) {
+                    finalAttempts++
+                    pendingGuidance = ToolLoop.FINAL_ANSWER_PROMPT
                     continue
                 }
                 if (haveToolResults) {
-                    emit(
-                        AgentEvent.Error(
-                            "工具已执行完毕，但模型始终没有给出最终答复。已保留工具结果供参考。",
-                        ),
-                    )
+                    // Out of retries. The tool output is real work, so hand it over rather
+                    // than discarding it behind an error the user cannot act on.
+                    emit(AgentEvent.Text(salvageFromToolResults()))
                 } else {
                     emit(AgentEvent.Error(failure!!))
                 }
@@ -162,23 +200,25 @@ class Agent(
             if (pendingCalls.isEmpty()) {
                 if (text.isBlank()) {
                     // Model stopped with neither text nor tools. If tools already ran, prompt
-                    // once for the summary; otherwise this really is an empty response.
-                    if (haveToolResults && !askedForFinal) {
-                        askedForFinal = true
-                        history.add(ChatMessage.user(ToolLoop.FINAL_ANSWER_PROMPT))
+                    // for the summary; otherwise this really is an empty response.
+                    if (haveToolResults && finalAttempts < MAX_FINAL_ATTEMPTS) {
+                        finalAttempts++
+                        pendingGuidance = ToolLoop.FINAL_ANSWER_PROMPT
                         continue
                     }
-                    emit(
-                        AgentEvent.Error(
-                            if (haveToolResults) {
-                                "工具已执行完毕，但模型始终没有给出最终答复。已保留工具结果供参考。"
-                            } else if (iteration > 1) {
-                                "模型在工具调用后没有返回任何内容，本轮结束。"
-                            } else {
-                                "模型返回了空响应，请重试或检查模型与接口地址是否匹配。"
-                            },
-                        ),
-                    )
+                    if (haveToolResults) {
+                        emit(AgentEvent.Text(salvageFromToolResults()))
+                    } else {
+                        emit(
+                            AgentEvent.Error(
+                                if (iteration > 1) {
+                                    "模型在工具调用后没有返回任何内容，本轮结束。"
+                                } else {
+                                    "模型返回了空响应，请重试或检查模型与接口地址是否匹配。"
+                                },
+                            ),
+                        )
+                    }
                     emit(AgentEvent.TurnDone)
                     return@flow
                 }
@@ -210,8 +250,12 @@ class Agent(
                 emit(AgentEvent.ToolEnd(call.name, result))
                 history.add(ChatMessage.tool(call.id, result))
             }
-            // The nudge rides on the next user turn, keeping the tool block contiguous.
-            history.add(ChatMessage.user(ToolLoop.NUDGE))
+
+            // Guidance for the next round. It must be merged into the FOLLOWING user turn
+            // rather than appended as its own message: two consecutive `user` messages make
+            // some gateways answer with another empty completion, which is why the
+            // final-answer retry below used to fail no matter how often it ran.
+            pendingGuidance = ToolLoop.NUDGE
         }
 
         emit(AgentEvent.Notice("已达到最大工具调用轮次（$maxIterations），停止本轮。"))

@@ -59,8 +59,11 @@ object ToolLoop {
      * Used when the model stops after tool calls without writing anything. Providers
      * frequently end such a round with only a finish_reason, so the caller asks once for the
      * write-up rather than declaring the whole turn empty.
+     *
+     * Wording matters: it must be unambiguous that a plain text answer is wanted NOW. A vague
+     * nudge invites another empty completion, which is how the guard this replaces kept firing.
      */
     const val FINAL_ANSWER_PROMPT: String =
-        "$MARKER 你已获得工具结果，但还没有给出答复。请立即根据以上结果直接写出最终答复，" +
-            "不要再调用工具，也不要询问用户。"
+        "$MARKER 现在请直接用中文写出最终答复。不要再调用任何工具，也不要询问用户。" +
+            "如果已有信息不足，就说明你查到了什么、还缺什么，同样不要留空。"
 }
